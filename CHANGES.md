@@ -27,6 +27,37 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-03 — Synced README Cost Comparison with audited COSTS.md totals
+
+**Files changed:** `README.md`
+**Author:** Team Leader (Claude)
+**Summary:** Updated the README's Cost Comparison section to reflect the audited numbers from COSTS.md (previously still showed the old $630 / $367 / $1,445 figures).
+
+### What changed
+- **Architecture-Level Cost Comparison table** — added rows for **Route 53** ($1 idle / $21 peak) and **Secrets Manager** ($3 idle / $0 peak); Glue idle cost corrected from $5 to $0 (first 1M objects free); CloudFront row updated to $402 peak (ap-southeast-1 rate correction); S3 storage row updated to $5 idle.
+- **Comprehensive Monthly Estimate table** — replaced the 7-category breakdown with the audited figures:
+  - Edge & Networking now includes Route 53 + Secrets Manager: $467.04 (was $393.81)
+  - Compute: $110.87 (was $115.07)
+  - Database: $74.84 (was $73.34)
+  - Storage: $5.29 (was $3.10)
+  - Un-optimized total: **~$703** (was ~$630)
+  - Optimized total: **~$402** (was ~$367)
+- **Annual Projection table** — Updated to ~$8,750 / ~$1,517 / **~$816** (was ~$8,750 / ~$1,710 / ~$1,445).
+- **Savings claim** — updated from "~80% to ~83%" to "~83% (un-optimized) to ~90% (optimized)".
+- **Key Insights** — rewrote to emphasize:
+  - Idle cost ~$74/month (down from ~$98)
+  - CloudFront Business flat-rate plan ($200/mo, no overage charges) as the single biggest cost optimization
+  - CloudFront data transfer remains the dominant peak-period cost (~67%)
+  - Optimized annual ~$816 (was ~$1,445)
+- Added note flags at the top of each table indicating that figures were audited 2026-07-03 against AWS ap-southeast-1 public pricing, and pointing to the COSTS.md Notes & Disclaimers for verification status.
+
+### Why
+- After the COSTS.md audit, the README was left out of sync — its Cost Comparison section still cited the pre-audit totals.
+- The user explicitly asked whether the README was also updated; the honest answer was "no, I'll fix it now".
+- Keeping these two documents in sync is critical since the README is the entry point and COSTS.md is the detailed companion.
+
+---
+
 ## 2026-07-03 — Cost audit: corrected AWS prices, added missed services, added CloudFront flat-rate plan
 
 **Files changed:** `COSTS.md`
