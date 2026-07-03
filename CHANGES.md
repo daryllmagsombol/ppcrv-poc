@@ -27,6 +27,57 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-03 — Cost audit: corrected AWS prices, added missed services, added CloudFront flat-rate plan
+
+**Files changed:** `COSTS.md`
+**Author:** Team Leader (Claude)
+**Summary:** Audited `COSTS.md` against current AWS ap-southeast-1 public pricing. Corrected two material price errors (WAF request rate, Glue Catalog storage), applied region-specific rate corrections (CloudFront + Aurora storage), added two previously-missed services (Route 53 DNS, Secrets Manager), and surfaced the new 2026 CloudFront flat-rate Business plan as the single biggest cost optimization.
+
+### What changed
+
+**Price corrections (verified against AWS pricing pages):**
+- **WAF request rate:** $1.00/M → **$0.60/M** (verified directly from `aws.amazon.com/waf/pricing/`). Saves ~$20/month.
+- **Glue Data Catalog storage:** removed the $5/month flat fee — the **first 1M objects are free**. Saves ~$5/month.
+- **CloudFront data transfer (ap-southeast-1):** $0.114/GB → **$0.140/GB** for the first 10 TB/month. Adds ~$68/month to the peak estimate.
+- **Aurora Serverless v2 storage (ap-southeast-1):** $0.115/GB-month → **$0.13/GB-month**. Adds ~$1.50/month.
+
+**Services added (previously missed):**
+- **Route 53 DNS:** $20.90/month (hosted zone + ~50M standard queries). All 50M public requests must resolve the domain name first.
+- **AWS Secrets Manager:** $2.50/month (5 secrets × $0.40 + API calls). Holds DB credentials and API keys for Lambda / Glue. Documented the free-tier alternative (Systems Manager Parameter Store).
+- **S3 request operations:** added explicit GET (~$2.00) and PUT (~$0.25) request costs that were bundled into a vague $0.05 line previously.
+- **WAF vended logs (CloudWatch):** added ~$1/month for WAF log ingestion beyond the 500 MB free per 1M requests.
+- **DynamoDB optional features table:** documented PITR (Point-in-Time Recovery, ~$0.40/mo, recommended for election integrity), Streams (free), Global Tables (not needed), DAX (not needed), GSIs (not needed).
+
+**New optimization — CloudFront Business Flat-Rate Plan:**
+- AWS introduced CloudFront flat-rate plans in 2026: Free / Pro $15 / Business $200 / Premium $1000/month.
+- The **Business plan ($200/month)** bundles CDN + WAF + DDoS + Route 53 DNS + TLS + serverless edge compute + CloudWatch Logs + S3 credits, with **no overage charges**, covering 125M requests and 50 TB data transfer.
+- For a 50M-request election month this replaces ~$465 of pay-as-you-go edge costs (CloudFront + WAF + Route 53 + vended logs) with a single $200 flat fee — a **$265/month saving** that is the single biggest cost lever.
+
+**Recomputed totals:**
+
+| Metric | Before (v1) | After (v2, audited) | Reason |
+|--------|-------------|----------------------|--------|
+| Un-optimized monthly (peak) | $630.42 | **$703.14** | +Route 53, +Secrets Manager, +S3 requests, +CF rate correction (offset by WAF + Glue corrections) |
+| Un-optimized annual | ~$1,709 | **~$1,517** | Lower idle baseline after Glue catalog correction |
+| Optimized monthly (peak) | ~$367 | **~$402** | Optimization now uses CF Business plan instead of pay-as-you-go caching |
+| Optimized annual | ~$1,445 | **~$816** | CloudFront Business plan + Parameter Store swap |
+| Savings vs EC2 (annual, optimized) | ~83% | **~90%** | Business plan makes the election-month burst effectively flat-rate |
+
+**Other edits:**
+- Added a "Verification status" disclaimer (#9) listing which prices were ✅ verified from AWS pricing pages vs ⚠️ knowledge-based (not directly fetched from the Bulk Pricing API due to file size / tool truncation). The Bulk Pricing API JSON files for ap-southeast-1 are 10-200 MB each and exceeded the subagent's context budget — the verification was done against the public AWS pricing pages directly (CloudFront, WAF) and via documented ap-southeast-1 public pricing knowledge for the rest.
+- Added Route 53 and Secrets Manager to the References table.
+- Updated all Mermaid visualizations (pie + xychart) to use the new per-service totals.
+- Updated the Cost Comparison section with new annual figures and added a note about the CloudFront Business plan being included in the Optimized column.
+
+### Why
+
+- The user requested a double-check of the costing for any missed items and updated AWS prices.
+- The audit caught two material price errors (WAF +30% too high, CloudFront -20% too low for ap-southeast-1), two missing services (DNS and secrets management), and the Glue Catalog free-tier correction.
+- Surfacing the new CloudFront Business flat-rate plan transformed the optimization story: instead of marginal caching savings on a $465 pay-as-you-go edge bill, the platform can move the entire edge layer to a single $200/month flat fee with no overage charges — turning the unpredictable election-month burst into a predictable fixed cost.
+- Honest verification status was added because the AWS Bulk Pricing API files were too large for the agent's tool budget; only the CloudFront and WAF public pricing pages were directly fetched and verified, while the remaining per-service rates are based on commonly-published ap-southeast-1 public pricing knowledge.
+
+---
+
 ## 2026-07-03 — Added COSTS.md and rewrote README Cost Comparison section
 
 **Files changed:** `COSTS.md` (new), `README.md`

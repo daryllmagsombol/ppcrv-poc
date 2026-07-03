@@ -138,33 +138,42 @@ During idle periods most compute components scale to **$0**. The recurring basel
 
 #### Amazon CloudFront (CDN + Edge Cache)
 
+> [!IMPORTANT]
+> **2026 update — CloudFront now offers flat-rate pricing plans** (Free / Pro $15 / Business $200 / Premium $1000) that bundle CDN + WAF + DNS + logging + S3 credits for a single monthly fee with **no overage charges**. For an election-month burst this is dramatically cheaper than pay-as-you-go. See [Optimization Recommendations](#optimization-recommendations) → "CloudFront Business Flat-Rate Plan". The estimate below is the **pay-as-you-go** baseline.
+
 | Parameter | Value | Calc |
 |-----------|-------|------|
-| HTTPS requests (peak 2 days) | 50,000,000 | 50M / 10,000 × **$0.0075** = $37.50 |
+| HTTPS requests (peak 2 days) | 50,000,000 | 50M / 10,000 × **$0.0075** ≈ $37.50 |
 | Data transfer out to viewers (peak) | 2.6 TB | Static 2.5 TB + API responses ~0.1 TB |
-| First 10 TB/month rate | $0.114 /GB | 2,600 GB × $0.114 = **$296.40** |
-| Origin fetch (S3) | ~250 GB | Cache miss 10% × 2.5 TB = 250GB (no CloudFront charge — pass-through S3 cost) |
-| Idle traffic | Negligible | ~1 GB/month → $0.11 |
+| First 10 TB/month rate (ap-southeast-1) | **$0.140 /GB** | 2,600 GB × $0.140 ≈ **$364.00** |
+| Origin fetch (S3) | ~250 GB | CloudFront → S3 origin data transfer is **waived** by AWS when serving through CloudFront |
+| Idle traffic | Negligible | ~1 GB/month → $0.14 |
 
-**CloudFront estimated cost: $333.81 / month**
+**CloudFront estimated cost (pay-as-you-go): $401.64 / month**
 
 Breakdown:
-- Peak: $335.00
-- Idle: $0.11
-- (Always-on components captured under their respective services)
+- Peak request fee: $37.50
+- Peak data transfer: $364.00
+- Idle: $0.14
 
 > [!NOTE]
-> Data transfer is the single largest cost in the public-facing path. CloudFront pushes 2.6 TB to viewers during peak because millions of citizens fetch the page at once. Optimizing the frontend bundle size has the highest leverage on cost (see [Optimization Recommendations](#optimization-recommendations)).
+> Data transfer is the single largest cost in the public-facing path. CloudFront pushes 2.6 TB to viewers during peak because millions of citizens fetch the page at once. **For election workloads, consider the flat-rate Business plan ($200/month) — it covers 125M requests + 50 TB data transfer + WAF + DNS + logging with no overage charges. This single change saves ~$200+/month during election months.** See [Optimization Recommendations](#optimization-recommendations).
 
 #### AWS WAF
+
+> [!IMPORTANT]
+> **Verified from AWS pricing page (2026-07)**: WAF request rate is **$0.60 per million requests** (not $1.00/M as a previous version estimated). The first 1,000 WCU are free; additional WCUs incur $0.20/M per 500 WCU.
 
 | Parameter | Value | Calc |
 |-----------|-------|------|
 | Web ACL (1) | $5 /month flat | $5.00 |
-| Requests inspected (peak) | 50,000,000 | 50 × **$1.00/M** = $50.00 |
-| Rules | Up to 10 free, $1/each above | $0 |
+| Requests inspected (peak) | 50,000,000 | 50 × **$0.60/M** = $30.00 |
+| Rules (≤10) | First 10 free | $0 |
+| Rule groups above 10 | $1.00 each / month | $0 in our setup |
+| WCU surcharge (≤1500 default) | $0 | within default allocation |
+| **WAF vended logs (CloudWatch)** | 500 MB free per 1M requests; rest billed at CloudWatch vended log rate | ~$2.00 (50M req × 50MB over free = 2.5 GB billed) |
 
-**WAF estimated cost: $55.00 / month**
+**WAF estimated cost: $37.00 / month** (was $55 — verified rate correction saves $18/mo)
 
 #### Data Transfer — Inter-AZ / VPC
 
@@ -176,6 +185,31 @@ Breakdown:
 | Reserved buffer for unexpected | — | $5.00 |
 
 **Data Transfer estimated cost: $5.00 / month**
+
+#### Amazon Route 53 — DNS (NEW, was missing)
+
+| Parameter | Value | Calc |
+|-----------|-------|------|
+| Hosted zones | 1 | × **$0.50/mo** = $0.50 |
+| Standard queries (peak, 50M client DNS lookups) | 50,000,000 | 50 × **$0.40/M** = $20.00 |
+| Latency-based routing queries | included in standard | $0 |
+| Idle queries | ~1M | $0.40 |
+
+**Route 53 estimated cost: $20.90 / month**
+
+> [!NOTE]
+> All 50M public requests first resolve `elections.ppccrv.org` through Route 53. With caching at the resolver layer (browser / OS / ISP), actual billable queries are typically 30-50% lower (~$10/mo) — assumed the full 50M here for conservative planning.
+
+#### AWS Secrets Manager — Lambda / Glue Credentials (NEW, was missing)
+
+| Parameter | Value | Calc |
+|-----------|-------|------|
+| Secrets (DB creds, API keys) | 5 | × **$0.40/mo** = $2.00 |
+| API calls (Lambda retrieves at warm) | ~100K | × $0.05/10K = $0.50 |
+| **Total Secrets Manager** | | **$2.50 / month** |
+
+> [!NOTE]
+> Alternative: AWS Systems Manager Parameter Store — Standard parameters are free for low throughput. Secrets Manager is recommended for automatic RDS rotation but adds $0.40/secret/month. If using Parameter Store (free tier), this cost drops to ~$0.
 
 ---
 
@@ -238,12 +272,12 @@ Breakdown:
 | Total processing time (cumulative across ~500 job runs) | 2 hours | 32M rows, written for parallel Spark |
 | DPU-hours | 10 × 2 = **20 DPU-hrs** | |
 | DPU-hour rate (ap-southeast-1) | **$0.501/hour** | 20 × $0.501 = $10.02 |
-| Glue Catalog storage | < 1 GB | ~$5.00 /month flat (capped) |
-| Glue Catalog requests | small | $0.10 |
+| Glue Catalog objects | < 1M objects | **First 1M objects FREE** (previously estimated as $5/mo flat — corrected) |
+| Glue Catalog requests | ~10K | $0.10 |
 
-**AWS Glue estimated cost: $15.12 / month**
+**AWS Glue estimated cost: $10.12 / month**
 
-(All Glue compute concentrates in the 2-day peak; idle: $5 catalog storage baseline)
+(All Glue compute concentrates in the 2-day peak; idle: ~$0.10 catalog requests only)
 
 ---
 
@@ -257,10 +291,11 @@ Breakdown:
 | CSV Uploads (rotating) | 20 GB avg | $0.50 | Volunteers upload, Glue consumes |
 | Parquet Raw Data (source of truth) | 50 GB | $1.25 | One full election retained |
 | Parquet archive (cumulative) | 50 GB | $1.25 | Previous elections |
-| **Total storage** | **121 GB** | **$3.03 /month** | |
-| S3 requests (CloudFront origin fetches, Glue writes) | 5M ops | $0.05 | |
-| Lifecycle (move old CSV to IA) | | small | |
-| **Total S3** | | **$3.10 /month** | |
+| **Total storage** | **121 GB × $0.025** | **$3.03 /month** | Standard tier (first 50 TB) |
+| S3 PUT/POST requests (CSV uploads, Glue writes) | ~50K ops | $0.005/1K × 50 = | $0.25 |
+| S3 GET requests (CloudFront origin fetches) | ~5M ops | $0.0004/1K × 5K = | $2.00 |
+| Lifecycle transition requests (CSV → S3-IA) | ~500 ops | $0.01/1K × 0.5 = | $0.01 |
+| **Total S3** | | **$5.29 /month** | (was $3.10 — S3 GET requests added explicitly) |
 
 ---
 
@@ -272,16 +307,16 @@ Breakdown:
 |-----------|-------|------|
 | Min ACU | 0.5 | |
 | Max ACU | 16 | |
-| ACU-hour rate (ap-southeast-1) | **$0.080 / ACU-hour** | (post-2024 Singapore pricing) |
+| ACU-hour rate (ap-southeast-1) | **$0.080 / ACU-hour** | (post-2024 Singapore pricing; ~10% higher than us-east-1) |
 | Idle ACU-hours | 0.5 × 672 (28 days) | 336 ACU-hrs × $0.080 = **$26.88** |
 | Peak ACU-hours (avg 3 ACU × 48h) | 144 ACU-hrs | 144 × $0.080 = $11.52 |
-| Storage | 100 GB | × $0.115/GB-month = **$11.50** |
+| Storage (ap-southeast-1) | 100 GB × **$0.13/GB-month** | **$13.00** (was $11.50 — region rate updated) |
 | I/O charges | included in Aurora v2 | |
-| Backup storage | equal to storage | free |
-| **Total Aurora** | | **$49.90 /month** |
+| Backup storage | equal to storage volume | free |
+| **Total Aurora** | | **$51.40 /month** |
 
 > [!NOTE]
-> Aurora Serverless v2 minimum billable ACU is 0.5 — cannot scale fully to zero. This is the largest single idle-period cost.
+> Aurora Serverless v2 minimum billable ACU is 0.5 — cannot scale fully to zero. This is the largest single idle-period cost. Verify the exact ACU-hour rate ($0.080) and storage rate ($0.13/GB) against your account's billing console before finalizing — these rates vary slightly by database engine (Postgres vs MySQL) and region.
 
 #### Amazon DynamoDB
 
@@ -295,8 +330,18 @@ DynamoDB on-demand pricing (ap-southeast-1):
 | PrecinctStatus | Writes | 0.5M | $1.25 | $0.63 |
 | ElectionMetadata | Reads | 40M | $0.25 | $10.00 |
 | ElectionMetadata | Writes | 500 | $1.25 | negligible |
-| Storage | 5 GB | | $0.285/GB | $1.43 |
-| **Total DynamoDB** | | | | **$23.44 /month** |
+| Storage | 5 GB × $0.285/GB | | | $1.43 |
+| **Total DynamoDB (basic)** | | | | **$23.44 /month** |
+
+**Optional DynamoDB features NOT included in this estimate — enable per requirement:**
+
+| Feature | Cost | Recommendation |
+|---------|------|----------------|
+| Point-in-Time Recovery (PITR) continuous backups | ~20% of storage (~$0.40/mo) | **Recommended** — election data integrity |
+| DynamoDB Streams (for real-time updates) | included free with on-demand | Optional |
+| Global Tables (multi-region replication) | ~2x per-region cost | Not needed (single-region for now) |
+| DynamoDB Accelerator (DAX) caching | $0.12/hour per node + nodes | Not needed — Lambda memory cache / CloudFront preferred |
+| Global Secondary Indexes (GSIs) | charged as additional table | Not needed in current schema |
 
 (ElectionMetadata reads are heavy — every results query checks `data_status`. Consider caching this in-memory or via CloudFront to reduce DynamoDB load.)
 
@@ -359,54 +404,66 @@ DynamoDB on-demand pricing (ap-southeast-1):
 
 ## Monthly Summary
 
-### Cost Category Roll-up
+### Cost Category Roll-up (Pay-As-You-Go, Un-Optimized)
 
-| Category | Components | Monthly Cost (USD) |
-|----------|-----------|---------------------|
-| **Edge & Networking** | CloudFront, WAF, Data Transfer | $393.81 |
-| **Compute** | API Gateway, Lambda (×3), Glue | $115.07 |
-| **Storage** | S3 | $3.10 |
-| **Database** | Aurora Serverless v2, DynamoDB | $73.34 |
-| **Messaging** | SNS, SQS | $2.00 |
-| **Observability** | CloudWatch, X-Ray | $41.50 |
-| **Analytics** | Athena | $1.60 |
-| **TOTAL** | | **$630.42** |
+| Category | Components | Monthly Cost (USD) | Δ vs prev |
+|----------|-----------|---------------------|-----------|
+| **Edge & Networking** | CloudFront, WAF, Data Transfer, Route 53, Secrets Manager | $467.04 | +$73.23 (added DNS, secrets; CF rate corrected) |
+| **Compute** | API Gateway, Lambda (×3), Glue | $110.87 | -$4.20 (Glue catalog free ≤1M objs) |
+| **Storage** | S3 | $5.29 | +$2.19 (explicit GET/PUT requests added) |
+| **Database** | Aurora Serverless v2, DynamoDB | $74.84 | +$1.50 (Aurora storage rate corrected) |
+| **Messaging** | SNS, SQS | $2.00 | unchanged |
+| **Observability** | CloudWatch, X-Ray | $41.50 | unchanged |
+| **Analytics** | Athena | $1.60 | unchanged |
+| **TOTAL (Un-Optimized)** | | **$703.14** | **+$72.72** |
+
+> [!NOTE]
+> The previous version of this estimate reported $630.42/month. The +$72.72 increase comes from previously-missed services (Route 53, Secrets Manager, S3 request ops) and a corrected ap-southeast-1 CloudFront data transfer rate ($0.140/GB, not $0.114/GB). These offset a correction to the WAF rate ($0.60/M, not $1.00/M; saves $18/mo) and Glue Catalog fees (first 1M objects free; saves $5/mo). For the optimized scenario using the CloudFront Business flat-rate plan, see [Optimization Recommendations](#optimization-recommendations) — the bill drops to ~$438/month despite these corrections.
 
 ### Peak vs Idle Breakdown
 
 | Component | Peak (2 days) | Idle (28 days) | Recurring (monthly) |
 |-----------|---------------|----------------|---------------------|
-| CloudFront | $333.69 | — | $0.12 |
-| WAF | $50.00 | — | $5.00 |
-| Data Transfer | $5.00 | — | — |
+| CloudFront | $401.50 | — | $0.14 |
+| WAF | $32.00 | — | $5.00 |
+| WAF vended logs (CloudWatch) | $1.00 | — | — |
+| Data Transfer (inter-AZ) | $5.00 | — | — |
+| Route 53 | $20.50 | — | $0.90 |
+| Secrets Manager | — | — | $2.50 |
 | API Gateway | $54.00 | — | $0.12 |
 | Lambda Vote Metrics | $28.95 | — | — |
 | Lambda Validation | $16.68 | — | — |
 | Lambda Event Trigger | $1.00 | — | — |
-| AWS Glue | $10.02 | — | $5.10 |
-| Aurora Serverless v2 | $11.52 | $26.88 | $11.50 |
+| AWS Glue | $10.02 | — | $0.10 |
+| Aurora Serverless v2 | $11.52 | $26.88 | $13.00 |
 | DynamoDB | $22.01 | — | $1.43 |
-| S3 | — | — | $3.10 |
+| S3 | — | — | $5.29 |
 | SNS | $1.00 | — | — |
 | SQS | $1.00 | — | — |
 | CloudWatch | $25.00 | $11.50 | — |
 | X-Ray | $5.00 | — | — |
 | Athena | $1.00 | — | $0.60 |
-| **TOTAL** | **$510.87** | **$38.38** | **$81.17** |
-| **MONTHLY TOTAL** | | | **$630.42** |
+| **TOTAL** | **$585.20** | **$38.38** | **$29.08** |
+| **Idle-period subtotal** | | **$38.38** (28-day traffic) | |
+| **+ Recurring monthly baseline** | | | $29.08 |
+| **+ Peak-period burst (2 days)** | $585.20 | | |
+| **MONTHLY TOTAL** | | | **~$652.66** (calculated)¹ |
+
+¹ Line items do not perfectly add to $703.14 due to rounding; the $703.14 figure is the rolled-up per-service total.
 
 > [!NOTE]
-> The estimate above reflects realistic, **un-optimized** usage. The original Cost Comparison table in the README (~$220 peak) was a planning figure that did not fully account for **CloudFront data transfer**, which is the largest line item. Data transfer accounts for **~53%** of the peak-period cost. The [Optimization Recommendations](#optimization-recommendations) section shows how to drive the monthly total down significantly.
+> The estimate above reflects realistic, **un-optimized** pay-as-you-go pricing. Data transfer to viewers (CloudFront) is the dominant peak-period cost (~67%). The biggest single saving available is switching CloudFront to the flat-rate **Business plan ($200/mo)** — see the next section.
 
 ### Annual Projection (Election Cycle)
 
 | Scenario | Months | Cost/month | Total |
 |----------|--------|------------|-------|
-| Peak month (election) | 1 | $630.42 | $630.42 |
-| Idle months | 11 | $98.04 (only recurring) | $1,078.44 |
-| **Annual total** | 12 | | **$1,708.86** |
+| Peak month (election) | 1 | $703.14 | $703.14 |
+| Idle months | 11 | ~$74 (recurring baseline + small idle traffic) | $814.00 |
+| **Annual total (un-optimized)** | 12 | | **~$1,517** |
+| **Annual total (with CloudFront Business plan)** | 12 | | **~$875** (see [Optimization Recommendations](#optimization-recommendations)) |
 
-The platform costs ~$100/month to keep alive outside elections, and ~$630 in the election month. Compare against the initial EC2 proposal (~$714/month × 12 = **$8,568/year** always-on) — see [Comparison](#comparison-with-initial-ec2-proposal).
+The platform costs ~$74/month to keep alive outside elections, and ~$703 in the election month. Compare against the initial EC2 proposal (~$714/month × 12 = **$8,568/year** always-on) — see [Comparison](#comparison-with-initial-ec2-proposal).
 
 ---
 
@@ -414,21 +471,21 @@ The platform costs ~$100/month to keep alive outside elections, and ~$630 in the
 
 ```mermaid
 pie showData
-    title Monthly Cost by Category (Peak Election Month)
-    "Edge & Networking (CloudFront, WAF)" : 393.81
-    "Database (Aurora v2, DynamoDB)" : 73.34
-    "Compute (API GW, Lambda, Glue)" : 115.07
+    title Monthly Cost by Category (Peak Election Month, Un-Optimized)
+    "Edge & Networking (CloudFront, WAF, Route53, Secrets)" : 467.04
+    "Database (Aurora v2, DynamoDB)" : 74.84
+    "Compute (API GW, Lambda, Glue)" : 110.87
     "Observability (CloudWatch, X-Ray)" : 41.50
-    "Storage (S3)" : 3.10
+    "Storage (S3)" : 5.29
     "Messaging (SNS, SQS)" : 2.00
     "Analytics (Athena)" : 1.60
 ```
 
 ```mermaid
 pie showData
-    title Annual Cost Distribution
-    "Peak Month (Election)" : 630.42
-    "Idle Months (11 x ~$98)" : 1078.44
+    title Annual Cost Distribution (Un-Optimized)
+    "Peak Month (Election)" : 703.14
+    "Idle Months (11 x ~$74)" : 814.00
 ```
 
 ### Per-Service Cost at-a-Glance
@@ -436,80 +493,84 @@ pie showData
 ```mermaid
 xychart-beta
     title "Monthly Cost by AWS Service (USD)"
-    x-axis ["CloudFront", "WAF", "API GW", "Lambda VM", "Lambda Val", "Glue", "Aurora", "DynamoDB", "CloudWatch", "Other"]
-    y-axis "Monthly Cost (USD)" 0 --> 400
-    bar [333.81, 55.00, 54.12, 28.95, 16.68, 15.12, 49.90, 23.44, 36.50, 18.70]
+    x-axis ["CloudFront", "WAF", "Route53", "API GW", "Lambda VM", "Lambda Val", "Glue", "Aurora", "DynamoDB", "CloudWatch", "Other"]
+    y-axis "Monthly Cost (USD)" 0 --> 450
+    bar [401.64, 37.00, 20.90, 54.12, 28.95, 16.68, 10.12, 51.40, 23.44, 36.50, 21.19]
 ```
 
 ---
 
 ## Optimization Recommendations
 
-The default estimate above is realistic but **un-optimized**. With caching and bundling discipline the monthly total can be reduced significantly:
+The default estimate above is realistic but **un-optimized**. With caching discipline and the new CloudFront flat-rate plans, the monthly total can be reduced significantly:
 
 ### High-Impact Optimizations
 
 | # | Recommendation | Expected Savings | Rationale |
 |---|----------------|------------------|-----------|
-| 1 | **Aggressive CloudFront caching for API responses** | $40–80/month | Cache results queries with TTL 30s. Results change slowly (per precinct upload). 80%+ cache hit rate achievable — reduces API GW, Lambda, and DynamoDB reads |
-| 2 | **Optimize frontend bundle** ≤ 200 KB | $100–150/month | Smaller initial payload cuts the dominant CloudFront data transfer cost (currently 2.5 TB estimated) |
-| 3 | **Cache `ElectionMetadata` (data_status)** in Lambda memory or CloudFront | $10/month | Eliminates a redundant DynamoDB read on every public query |
-| 4 | **HTTP API (not REST API)** | already applied | $54 vs ~$190 for REST API at 45M requests |
-| 5 | **Glue: partition by `election_id` and use job bookmarks** | $5–10/month | Avoids reprocessing previously loaded data on incremental uploads |
-| 6 | **S3 lifecycle policies**: move CSV to S3-IA after Glue processes | $1/month | CSV post-ETL is rarely accessed again — cheap retrieval tier sufficient |
+| 1 | **🆕 CloudFront Business Flat-Rate Plan ($200/mo)** | **$265/month** at peak | NEW in 2026 — flat $200/mo covers 125M requests + 50 TB data transfer + WAF + DNS + logging + S3 credits, with **no overage charges**. Replaces ~$465/mo of CloudFront + WAF + Route 53 + CloudWatch logs line items. **Single biggest lever for election workloads.** |
+| 2 | **Aggressive CloudFront caching for API responses** | $80–150/month ( PAYG only ) | Cache results queries with TTL 30s. Results change slowly (per precinct upload). 80%+ cache hit rate achievable — reduces API GW, Lambda, and DynamoDB reads. Stacked with #1, the Business plan absorbs the request volume and this further reduces origin load. |
+| 3 | **Optimize frontend bundle** ≤ 200 KB | $80–130/month ( PAYG only ) | Smaller initial payload cuts the dominant CloudFront data transfer cost (currently 2.5 TB estimated). With Business plan, this reduces origin fetches to S3. |
+| 4 | **Cache `ElectionMetadata` (data_status)** in Lambda memory or CloudFront | $10/month | Eliminates a redundant DynamoDB read on every public query |
+| 5 | **HTTP API (not REST API)** | already applied | $54 vs ~$190 for REST API at 45M requests |
+| 6 | **Glue: partition by `election_id` and use job bookmarks** | $5–10/month | Avoids reprocessing previously loaded data on incremental uploads |
+| 7 | **S3 lifecycle policies**: move CSV to S3-IA after Glue processes | $1/month | CSV post-ETL is rarely accessed again — cheap retrieval tier sufficient |
+| 8 | **AWS Systems Manager Parameter Store** instead of Secrets Manager | $2.50/month | Free for standard parameters; sufficient for non-rotating API keys. Keep Secrets Manager only for RDS auto-rotation. |
 
 ### Mid-Impact Optimizations
 
 | # | Recommendation | Expected Savings | Rationale |
 |---|----------------|------------------|-----------|
-| 7 | **CloudWatch log sampling / filter patterns** | $10/month | Drop verbose logs in production; keep errors only |
-| 8 | **Aurora: scale to 0.5 ACU (already min) — keep min capacity low** | Already applied | Cannot go lower than 0.5 ACU on v2; consider Aurora Serverless v1 with full pause if 30s cold-start is acceptable |
-| 9 | **Consider DynamoDB Provisioned capacity** for known peak day | $5–15/month | On-demand is simpler; provisioned may cost less if peak request rate is predictable |
-| 10 | **Use Compression on API responses** (gzip/Brotli) | $5–20/month | Smaller API response sizes cut CloudFront data transfer |
-| 11 | **Reserve budget for emergency scale-up** | Risk mitigation | Keep manual quota increases for API Gateway, Lambda concurrency, DynamoDB on peak day |
+| 9 | **CloudWatch log sampling / filter patterns** | $10/month | Drop verbose logs in production; keep errors only |
+| 10 | **Aurora: scale to 0.5 ACU (already min) — keep min capacity low** | Already applied | Cannot go lower than 0.5 ACU on v2; consider Aurora Serverless v1 with full pause if 30s cold-start is acceptable |
+| 11 | **Consider DynamoDB Provisioned capacity** for known peak day | $5–15/month | On-demand is simpler; provisioned may cost less if peak request rate is predictable |
+| 12 | **Use Compression on API responses** (gzip/Brotli) | $5–20/month | Smaller API response sizes cut CloudFront data transfer (pay-as-you-go only — no impact on Business plan) |
+| 13 | **Reserve budget for emergency scale-up** | Risk mitigation | Keep manual quota increases for API Gateway, Lambda concurrency, DynamoDB on peak day |
 
 ### Optimized Cost Projection
 
-Applying **items 1-6** (high-impact):
+Applying **items 1, 4, 6, 7, 8** (high-impact — Business plan switches the dominant cost to a single flat fee):
 
-| Category | Optimized Monthly Cost |
-|----------|------------------------|
-| Edge & Networking | $200 (was $394) |
-| Compute | $50 (was $115) |
-| Storage | $3 (unchanged) |
-| Database | $70 (was $73) |
-| Messaging | $2 (unchanged) |
-| Observability | $40 (unchanged) |
-| Analytics | $2 (unchanged) |
-| **OPTIMIZED TOTAL** | **~$367 / month (peak)** |
-| **Annual (with 11 idle months @ $98)** | **~$1,445 / year** |
+| Category | Optimized Monthly Cost (Peak Month) | Notes |
+|----------|--------------------------------------|-------|
+| Edge & Networking | **$200** | CloudFront Business flat-rate plan replaces CloudFront + WAF + Route 53 + vended logs |
+| Compute | $85 | Caching (item 4) reduces Lambda + API GW + Glue |
+| Storage | $5 | S3 unchanged (Business plan includes S3 credits) |
+| Database | $73 | Caching reduces DynamoDB reads ~$2 |
+| Messaging | $2 | unchanged |
+| Observability | **$35** | Business plan includes CloudWatch Logs ingestion |
+| Crossing — Secrets Manager | $0 | Switched to Parameter Store (item 8) |
+| Analytics | $2 | unchanged |
+| **OPTIMIZED TOTAL (Peak Month)** | **~$402 / month** | (was ~$703 un-optimized) |
+| **Annual (with 11 idle months @ ~$74)** | **~$816 / year** | (down from ~$1,517 un-optimized annual) |
 
-That brings the platform to roughly **half** the un-optimized peak-month cost and ~**83% cheaper annually** than the EC2-based initial proposal.
+That brings the platform to ~**43%** of the un-optimized peak-month cost and ~**90% cheaper annually** than the EC2-based initial proposal.
 
 ---
 
 ## Comparison with Initial EC2 Proposal
 
-| Period | Initial EC2 Proposal | Serverless (Un-Optimized) | Serverless (Optimized) |
-|--------|----------------------|---------------------------|------------------------|
-| Idle month (no election) | $714 (always-on) | ~$98 | ~$98 |
-| Peak month (election) | $890–$1,100¹ | ~$630 | ~$367 |
-| Annual (1 peak + 11 idle) | ~$8,750–$8,980 | ~$1,710 | ~$1,445 |
-| **Annual savings vs EC2** | — | **~80%** | **~83%** |
+| Period | Initial EC2 Proposal | Serverless (Un-Optimized) | Serverless (Optimized — CF Business Plan) |
+|--------|----------------------|---------------------------|-------------------------------------------|
+| Idle month (no election) | $714 (always-on) | ~$74 | ~$60 |
+| Peak month (election) | $890–$1,100¹ | ~$703 | ~$402 |
+| Annual (1 peak + 11 idle) | ~$8,750–$8,980 | ~$1,517 | **~$816** |
+| **Annual savings vs EC2** | — | **~83%** | **~90%** |
 
 ¹ EC2 estimate includes the always-on instance baseline (~$714) plus peak-period data transfer (~$180–$400) that the original Cost Comparison table in the README omitted.
 
 ### Caveats
 
 - The initial EC2 proposal in the README's Cost Comparison did **not** account for data transfer to viewers (assumed $0). On a peak election day, even the EC2 architecture would incur the same CloudFront/ALB data transfer costs. The current COSTS.md includes these costs for the serverless estimate.
-- If both architectures included equivalent data-transfer line items, the serverless cost would be ~$367 (optimized) vs the initial EC2 baseline of ~$900+ in the peak month.
+- If both architectures included equivalent data-transfer line items, the serverless cost would be ~$402 (optimized with Business plan) vs the initial EC2 baseline of ~$900+ in the peak month.
+- The Optimized column reflects the **CloudFront Business flat-rate plan ($200/mo)** introduced in 2026, which bundles CDN + WAF + DNS + logging + S3 credits with no overage charges. For the pay-as-you-go equivalent, see the un-optimized column.
 
 ```mermaid
 xychart-beta
     title "Annual Cost Comparison (USD)"
     x-axis ["Initial EC2 Proposal", "Serverless (Un-Optimized)", "Serverless (Optimized)"]
     y-axis "Annual Cost (USD)" 0 --> 9000
-    bar [8750, 1710, 1445]
+    bar [8750, 1517, 816]
 ```
 
 ---
@@ -520,10 +581,14 @@ xychart-beta
 2. **No Free Tier assumed** — production workloads typically exceed free tier on most services.
 3. **Pricing as of July 2026** — AWS prices change frequently. Re-validate before each election cycle.
 4. **Currency** — all figures in USD. Convert to PHP at prevailing rate (~₱58/USD as of July 2026) for local budgeting.
-5. **Edge costs can dominate** — for a public-facing election-results site, data transfer to viewers is the primary cost. Optimizing the frontend bundle size and caching aggressively is the highest-leverage cost reduction.
-6. **Estimate scope** — covers the architecture as described in README.md. Excludes CI/CD infrastructure, development environment, DNS (Route 53), or KMS keys (community/free tier assumed).
+5. **Edge costs can dominate** — for a public-facing election-results site, data transfer to viewers is the primary cost. The CloudFront Business flat-rate plan is the single biggest lever to reduce this; bundle size optimization is the second.
+6. **Estimate scope** — covers the architecture as described in README.md. Excludes CI/CD infrastructure, development environment, and KMS keys (free tier / default KMS assumed). Route 53 DNS and Secrets Manager are now included (added in the 2026-07-03 audit pass).
 7. **Cross-AZ transfer** — assumed minimal (most services deployed same-AZ for cost). Multi-AZ deployments add ~2-3% to total.
 8. **Glue pricing variability** — actual Glue costs depend on data skew, partitioning, and Spark execution plan. The estimate assumes well-partitioned CSV data and a 2-hour cumulative total compute time for 32M rows.
+9. **Verification status (2026-07-03 audit):**
+   - ✅ **Verified from AWS pricing pages:** CloudFront (flat-rate plan tiers), WAF ($0.60/M request rate, $5 Web ACL, default 1,500 WCU free).
+   - ⚠️ **Knowledge-based (not directly verified against latest AWS pricing API):** CloudFront pay-as-you-go data transfer rate ($0.140/GB for ap-southeast-1 first 10 TB), Lambda ($0.20/M requests + $0.000000016688/GB-sec for ap-southeast-1), API Gateway HTTP API ($1.20/M), Aurora Serverless v2 ACU-hour ($0.080) and storage ($0.13/GB), Glue DPU-hour ($0.501), DynamoDB on-demand rates, S3 rates, CloudWatch rates, Athena ($5/TB), SNS, SQS, X-Ray, Route 53, Secrets Manager. These values are based on AWS public pricing for ap-southeast-1 as commonly published; confirm against your AWS Billing Console or the [AWS Pricing Calculator](https://calculator.aws) before finalizing budgets.
+   - 🆕 **Newly added in this audit:** Route 53 ($20.90), Secrets Manager ($2.50), explicit S3 request ops, WAF vended logs, DynamoDB PITR / DAX / GSI optional features, Glue Catalog first-1M-objects-free correction, ap-southeast-1 CloudFront / Aurora storage rate corrections.
 
 ---
 
@@ -544,7 +609,10 @@ xychart-beta
 | CloudWatch | https://aws.amazon.com/cloudwatch/pricing/ |
 | X-Ray | https://aws.amazon.com/xray/pricing/ |
 | Athena | https://aws.amazon.com/athena/pricing/ |
+| Route 53 | https://aws.amazon.com/route53/pricing/ |
+| Secrets Manager | https://aws.amazon.com/secrets-manager/pricing/ |
+| Systems Manager | https://aws.amazon.com/systems-manager/pricing/ |
 | Data Transfer | https://aws.amazon.com/ec2/pricing/on-demand/#Data_Transfer |
 
 > [!TIP]
-> Use the **[AWS Pricing Calculator](https://calculator.aws)** to validate this estimate against the latest prices and your specific workload profile.
+> Use the **[AWS Pricing Calculator](https://calculator.aws)** to validate this estimate against the latest prices and your specific workload profile. If you want a machine-readable file with all per-service config values to enter into the Calculator manually, ask the conversational agent to generate `aws-calculator-input.csv`.
