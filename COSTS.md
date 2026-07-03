@@ -456,14 +456,51 @@ DynamoDB on-demand pricing (ap-southeast-1):
 
 ### Annual Projection (Election Cycle)
 
+#### Un-Optimized (Pay-As-You-Go, All Year)
+
 | Scenario | Months | Cost/month | Total |
 |----------|--------|------------|-------|
 | Peak month (election) | 1 | $703.14 | $703.14 |
-| Idle months | 11 | ~$74 (recurring baseline + small idle traffic) | $814.00 |
+| Idle months | 11 | ~$74 | $814.00 |
 | **Annual total (un-optimized)** | 12 | | **~$1,517** |
-| **Annual total (with CloudFront Business plan)** | 12 | | **~$875** (see [Optimization Recommendations](#optimization-recommendations)) |
 
-The platform costs ~$74/month to keep alive outside elections, and ~$703 in the election month. Compare against the initial EC2 proposal (~$714/month × 12 = **$8,568/year** always-on) — see [Comparison](#comparison-with-initial-ec2-proposal).
+#### Optimized (CloudFront Plan-Switching: Free → Business → Free)
+
+The optimal pattern is to **switch CloudFront plans per election cycle**, paying only for the Business plan during the election month and dropping to the Free plan for the 11 idle months:
+
+| Scenario | Months | CloudFront Plan | Cost/month | Total |
+|----------|--------|-----------------|------------|-------|
+| Peak month (election) | 1 | Business ($200/mo) | ~$402 | $402 |
+| Idle months (WAF stays attached) | 11 | Free ($0/mo) | ~$65 | $715 |
+| **Annual total (optimized, WAF attached)** | 12 | | | **~$1,117** |
+| Idle months (WAF detached during idle) | 11 | Free ($0/mo) | ~$60 | $660 |
+| **Annual total (optimized, WAF detached)** | 12 | | | **~$1,062** |
+
+> [!IMPORTANT]
+> **The previous version of COSTS.md reported ~$816/year (and another section reported ~$875/year) — both were arithmetic errors.** The correct optimized annual is **~$1,117/year** (WAF stays attached for security) or **~$1,062/year** (WAF detached during idle). We recommend keeping WAF attached year-round for the $55/year cost (~5% of total) — the security posture is worth it for an election platform.
+>
+> **Idle month breakdown (Free CF plan + WAF attached + SSM Parameter Store):**
+> - CloudFront Free plan: **$0** (covers 1M requests / 100 GB — idle traffic is trivial)
+> - WAF Web ACL + minimal inspection: **$5**
+> - Route 53 (hosted zone + minimal queries): **~$1**
+> - Aurora Serverless v2 (0.5 ACU min + storage): **~$40**
+> - DynamoDB (storage only): **~$1.43**
+> - S3 (121 GB + lifecycle): **~$5**
+> - CloudWatch (dashboards + alarms + log storage, no new ingest): **~$11**
+> - Athena (ad-hoc): **~$0.60**
+> - All other compute: **$0** (free-tier covers idle invocations)
+> - **Total ~$64/month** (rounded to $65 for buffer)
+
+#### Plan-Switching Mechanics — ⚠️ Verify With AWS
+
+| Question | Assumed Answer | Action Required |
+|----------|----------------|-----------------|
+| Can I switch CloudFront plans month-to-month? | **Yes** — plans are per-distribution monthly subscriptions; AWS allows changes effective at next billing cycle | Verify in CloudFront console or with AWS Support before relying on this |
+| Is there a penalty for switching? | **No** (assumed) | Confirm with AWS Support |
+| Does WAF remain attached when CF plan changes? | **Yes** — WAF attachment is independent of CF plan | Verify WAF fees still billed separately during Free plan period |
+| Does the Business plan absorb WAF request fees? | **Partial** — Business plan includes WAF advanced protections, but per-request inspection fees may still apply | Conservative estimate keeps WAF request fees outside the Business plan |
+
+The platform costs ~$65/month to keep alive outside elections (with WAF attached), and ~$402 in the election month. Compare against the initial EC2 proposal (~$714/month × 12 = **$8,568/year** always-on) — see [Comparison](#comparison-with-initial-ec2-proposal).
 
 ---
 
@@ -529,7 +566,9 @@ The default estimate above is realistic but **un-optimized**. With caching disci
 
 ### Optimized Cost Projection
 
-Applying **items 1, 4, 6, 7, 8** (high-impact — Business plan switches the dominant cost to a single flat fee):
+Applying **items 1, 4, 6, 7, 8** (high-impact — Business plan switches the dominant cost to a single flat fee; plan switches to Free during idle months):
+
+**Peak month (election, CloudFront Business plan):**
 
 | Category | Optimized Monthly Cost (Peak Month) | Notes |
 |----------|--------------------------------------|-------|
@@ -541,36 +580,71 @@ Applying **items 1, 4, 6, 7, 8** (high-impact — Business plan switches the dom
 | Observability | **$35** | Business plan includes CloudWatch Logs ingestion |
 | Crossing — Secrets Manager | $0 | Switched to Parameter Store (item 8) |
 | Analytics | $2 | unchanged |
-| **OPTIMIZED TOTAL (Peak Month)** | **~$402 / month** | (was ~$703 un-optimized) |
-| **Annual (with 11 idle months @ ~$74)** | **~$816 / year** | (down from ~$1,517 un-optimized annual) |
+| **OPTIMIZED PEAK MONTH** | **~$402 / month** | (was ~$703 un-optimized) |
 
-That brings the platform to ~**43%** of the un-optimized peak-month cost and ~**90% cheaper annually** than the EC2-based initial proposal.
+**Idle month (CloudFront Free plan, WAF stays attached for security):**
+
+| Category | Optimized Idle Cost | Notes |
+|----------|---------------------|-------|
+| CloudFront (Free plan) | $0 | Covers 1M req / 100 GB — idle traffic is trivial |
+| WAF (Web ACL + minimal inspection) | $5 | Recommended to keep WAF attached year-round |
+| Route 53 (hosted zone + minimal queries) | $1 | |
+| API Gateway (idle ~100K requests) | $0 | Free tier covers 1M requests |
+| Lambda (idle ~50K invocations) | $0 | Free tier covers 1M invocations |
+| AWS Glue | $0 | No jobs running |
+| Aurora Serverless v2 (0.5 ACU min + storage) | $40 | Cannot scale below 0.5 ACU |
+| DynamoDB (storage only) | $1.43 | |
+| S3 (121 GB + lifecycle) | $5 | |
+| SNS / SQS | $0 | |
+| CloudWatch (dashboards + alarms + log storage, no new ingest) | $11 | |
+| X-Ray (free tier) | $0 | |
+| Athena (ad-hoc) | $0.60 | |
+| Secrets Manager (swapped to SSM Parameter Store) | $0 | |
+| **OPTIMIZED IDLE MONTH** | **~$64 / month** | (rounded to $65 for buffer) |
+
+**Optimized Annual Projection:**
+
+| Period | Months | Monthly Cost | Annual Cost |
+|--------|--------|--------------|-------------|
+| Peak month (Business plan) | 1 | ~$402 | $402 |
+| Idle months (Free plan, WAF attached) | 11 | ~$65 | $715 |
+| **OPTIMIZED ANNUAL TOTAL** | 12 | | **~$1,117 / year** |
+| Idle months (Free plan, WAF detached for aggressive savings) | 11 | ~$60 | $660 |
+| **OPTIMIZED ANNUAL (WAF detached)** | 12 | | **~$1,062 / year** |
+
+That brings the platform to ~**57%** of the un-optimized peak-month cost (was incorrectly stated as ~43%) and **~87% cheaper annually** than the EC2-based initial proposal (was incorrectly stated as ~90%).
+
+> [!CAUTION]
+> **Correction notice:** The previous version of this section reported "~$816/year" and the Annual Projection section reported "~$875/year" — both were arithmetic errors. The correct optimized annual is **~$1,117/year** with WAF attached year-round, or **~$1,062/year** with WAF detached during idle. We recommend keeping WAF attached (the extra $55/year is worth the security posture for an election platform).
 
 ---
 
 ## Comparison with Initial EC2 Proposal
 
-| Period | Initial EC2 Proposal | Serverless (Un-Optimized) | Serverless (Optimized — CF Business Plan) |
-|--------|----------------------|---------------------------|-------------------------------------------|
-| Idle month (no election) | $714 (always-on) | ~$74 | ~$60 |
-| Peak month (election) | $890–$1,100¹ | ~$703 | ~$402 |
-| Annual (1 peak + 11 idle) | ~$8,750–$8,980 | ~$1,517 | **~$816** |
-| **Annual savings vs EC2** | — | **~83%** | **~90%** |
+| Period | Initial EC2 Proposal | Serverless (Un-Optimized PAYG) | Serverless (Optimized — Plan-Switching) |
+|--------|----------------------|--------------------------------|------------------------------------------|
+| Idle month (no election) | $714 (always-on) | ~$74 | ~$65 (Free CF plan, WAF attached) |
+| Peak month (election) | $890–$1,100¹ | ~$703 | ~$402 (Business plan, no overage) |
+| Annual (1 peak + 11 idle) | ~$8,750–$8,980 | ~$1,517 | **~$1,117** (WAF attached)² |
+| **Annual savings vs EC2** | — | **~83%** | **~87%** (WAF attached) / **~88%** (WAF detached) |
 
 ¹ EC2 estimate includes the always-on instance baseline (~$714) plus peak-period data transfer (~$180–$400) that the original Cost Comparison table in the README omitted.
+
+² Optimized annual = $402 (peak, Business plan) + 11 × $65 (idle, Free plan + WAF attached) = $402 + $715 = $1,117. If WAF is detached during idle months: $402 + 11 × $60 = $1,062 (saves $55/year, but loses year-round WAF protection).
 
 ### Caveats
 
 - The initial EC2 proposal in the README's Cost Comparison did **not** account for data transfer to viewers (assumed $0). On a peak election day, even the EC2 architecture would incur the same CloudFront/ALB data transfer costs. The current COSTS.md includes these costs for the serverless estimate.
 - If both architectures included equivalent data-transfer line items, the serverless cost would be ~$402 (optimized with Business plan) vs the initial EC2 baseline of ~$900+ in the peak month.
-- The Optimized column reflects the **CloudFront Business flat-rate plan ($200/mo)** introduced in 2026, which bundles CDN + WAF + DNS + logging + S3 credits with no overage charges. For the pay-as-you-go equivalent, see the un-optimized column.
+- The Optimized column assumes **CloudFront plan-switching**: Business plan ($200/mo) for the election month, Free plan ($0/mo) for the 11 idle months. **Plan-switching mechanics must be verified with AWS Support** — month-to-month switching without penalty is assumed but not confirmed.
+- The CloudFront Business flat-rate plan ($200/mo, introduced 2026) bundles CDN + WAF advanced protections + DDoS + Route 53 DNS + TLS + serverless edge compute + CloudWatch Logs ingestion + S3 credits, with **no overage charges**, covering 125M requests and 50 TB data transfer.
 
 ```mermaid
 xychart-beta
     title "Annual Cost Comparison (USD)"
     x-axis ["Initial EC2 Proposal", "Serverless (Un-Optimized)", "Serverless (Optimized)"]
     y-axis "Annual Cost (USD)" 0 --> 9000
-    bar [8750, 1517, 816]
+    bar [8750, 1517, 1117]
 ```
 
 ---

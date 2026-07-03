@@ -58,6 +58,87 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-03 — Removed duplicate outdated architecture-level comparison table from README.md
+
+**Files changed:** `README.md`, `CHANGES.md`
+**Author:** Team Leader (Claude)
+**Summary:** The old simplified architecture comparison table (showing $15 idle / $220 peak) was a duplicate left behind when the updated detailed table ($98 idle / $548 peak with Route 53, Secrets Manager, Observability) was added. Removed rows 608-619 from README.md.
+
+### What changed
+- Removed duplicate table and its "Savings: ~70% at peak..." caption
+- The correct, updated Architecture-Level table at line 542 remains
+- No data loss — the old table's values contradicted the audited totals in COSTS.md
+
+### Why
+- The table was a stale duplicate from the pre-audit draft and contradicted the correct figures
+- Having two tables with different numbers was confusing and risked the wrong numbers being cited
+
+---
+
+## 2026-07-03 — Fixed arithmetic error in optimized annual projection; documented CloudFront plan-switching model
+
+**Files changed:** `COSTS.md`, `README.md`
+**Author:** Team Leader (Claude)
+**Summary:** The user asked whether the CloudFront Business plan is meant to be subscribed only for the election month and whether idle months were costed correctly. That question exposed a real arithmetic error — the optimized annual had been reported as **~$816/year** in one section of COSTS.md and **~$875/year** in another (both wrong). Recomputed with a proper plan-switching model and corrected to **~$1,117/year**.
+
+### What changed
+
+**Root cause — an arithmetic error I should have caught earlier:**
+- The previous optimized annual equation in COSTS.md was: "$402 (peak) + 11 × ~$74 (idle) = ~$816/year". This was wrong on two counts:
+  1. **Arithmetic** — $402 + (11 × $74) actually equals **$1,216**, not $816. A character transposition error.
+  2. **Idle baseline** — $74 was inherited from the un-optimized idle, where it included pay-as-you-go CloudFront/R53/Secrets line items that are absorbed or zeroed under the optimized plan-switching scenario. The correct optimized idle baseline is **~$65** (not $74) once the CloudFront Free plan and SSM Parameter Store swap are applied.
+
+**Replaced the hand-wavy "annual (with 11 idle months @ ~$74)" line with an explicit plan-switching model:**
+
+| Period | Plan | Cost |
+|--------|------|------|
+| Peak month (1) | CloudFront Business ($200/mo, no overage) | ~$402 |
+| Idle months (11) | CloudFront Free ($0/mo) + WAF attached | ~$65 each |
+| **Optimized annual total** | | **~$1,117/year** |
+
+**Added a new "Plan-Switching Mechanics — Verify With AWS" subsection** in COSTS.md listing explicit assumptions that must be confirmed:
+- Can CloudFront plans be switched month-to-month? (assumed yes)
+- Is there a switching penalty? (assumed no)
+- Does WAF remain attached when the CF plan changes? (assumed yes)
+- Does the Business plan absorb WAF request fees, or only the WAF feature itself? (kept WAF request fees outside the plan as a conservative assumption)
+
+**Added two idle scenarios** — idle month with WAF stays attached (~$65/mo, recommended for security) vs WAF detached during idle (~$60/mo, saves $55/year but loses year-round protection). Recommended keeping WAF attached given the small saving.
+
+**Idle month breakdown itemized explicitly** in COSTS.md so the $65/month figure is auditable:
+- CF Free plan: $0 (covers 1M req / 100 GB — idle traffic is trivial)
+- WAF Web ACL + minimal inspection: $5
+- Route 53 (hosted zone + minimal queries): $1
+- API Gateway (idle ~100K req): $0 (free tier)
+- Lambda (idle ~50K invocations): $0 (free tier)
+- Glue: $0
+- Aurora Serverless v2 (0.5 ACU min + storage): $40
+- DynamoDB (storage only): $1.43
+- S3 (121 GB + lifecycle): $5
+- CloudWatch (dashboards + alarms + log storage, no new ingest): $11
+- Athena: $0.60
+- Total: ~$64 (rounded to $65 for buffer)
+
+**Updated the Comparison with Initial EC2 Proposal table** in COSTS.md to use $1,117 (with WAF attached) and $1,062 (with WAF detached) instead of $816.
+
+**Updated the `xychart-beta` annual comparison** in COSTS.md from `bar [8750, 1517, 816]` to `bar [8750, 1517, 1117]`.
+
+**Updated the savings claim** from "~90% cheaper annually" to "~87% cheaper annually" (WAF attached) / "~88% cheaper annually" (WAF detached).
+
+**Synced README.md:**
+- Annual Projection table updated: ~$8,750 / ~$1,517 / **~$1,117** / ~$1,062 (added "WAF detached" row)
+- "Annual savings" claim updated to "~83% (un-optimized) to ~87% (optimized, WAF attached)"
+- Added IMPORTANT callout describing the plan-switching assumption and linking to COSTS.md "Plan-Switching Mechanics" subsection
+- Added CAUTION callout explicitly noting the previous $816 figure was an arithmetic error and stating the corrected ~$1,117
+- Comprehensive Monthly Estimate table updated: replaced single "Optimized ~$402" row with two rows — peak month ($402) and idle month ($65)
+- Key Insights updated: "Idle cost ~$65/month" (was $74), "Optimized annual ~$1,117" (was $816), savings "~87% vs EC2" (was ~90%)
+
+### Why
+- The user's question "do I only subscribe for one month?" was the right question to ask — it forced me to re-examine the cost model assumption and exposed both an arithmetic error and a logical inconsistency (the optimized idle number was inherited from the un-optimized idle that included line items the optimized scenario eliminates).
+- Errors like this are exactly why user review of specs is important — the previous $816 figure looked plausible on first read because the optimized scenario is genuinely much cheaper than un-optimized, but the correct ~$1,117 is still ~87% cheaper than the EC2 proposal, which is the actual story worth telling.
+- Documenting the plan-switching model explicitly forces a verification checkpoint — the "month-to-month switching without penalty is assumed but not confirmed" disclaimer is critical because the entire optimized scenario depends on it being possible.
+
+---
+
 ## 2026-07-03 — Cost audit: corrected AWS prices, added missed services, added CloudFront flat-rate plan
 
 **Files changed:** `COSTS.md`

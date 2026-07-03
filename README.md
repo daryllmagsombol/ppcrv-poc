@@ -575,40 +575,38 @@ For an election month with **50M requests over a 2-day peak window** in the **ap
 | Messaging (SNS, SQS) | $2.00 |
 | Ad-Hoc Analytics (Athena) | $1.60 |
 | **Monthly Total (Un-Optimized, pay-as-you-go)** | **~$703** |
-| **Monthly Total (Optimized — CloudFront Business flat-rate plan $200/mo)** | **~$402** |
+| **Monthly Total (Optimized — CF Business plan for peak month only)** | **~$402** |
+| **Monthly Total (Optimized idle — CF Free plan, WAF attached)** | **~$65** |
 
 ### Annual Projection
+
+For an election-cycle year (1 peak month + 11 idle months):
 
 | Scenario | Annual Cost (USD) |
 |----------|-------------------|
 | Initial EC2 Proposal (always-on) | ~$8,750 |
-| Serverless (Un-Optimized, pay-as-you-go) | ~$1,517 |
-| Serverless (Optimized — CloudFront Business plan) | **~$816** |
+| Serverless (Un-Optimized, pay-as-you-go all year) | ~$1,517 |
+| Serverless (Optimized — CF plan-switch: Business for peak, Free for idle) | **~$1,117** |
+| Serverless (Optimized + WAF detached during idle months) | ~$1,062 |
 
-**Annual savings vs the initial EC2 proposal: ~83% (un-optimized) to ~90% (optimized with the CloudFront flat-rate plan).**
+**Annual savings vs the initial EC2 proposal: ~83% (un-optimized) to ~87% (optimized with CloudFront plan-switching, WAF stays attached).**
+
+> [!IMPORTANT]
+> The optimized scenario assumes **CloudFront plan-switching**: subscribe to the Business plan ($200/mo, no overage charges, bundles CDN + WAF + DNS + logging) for the single election month, then drop to the Free plan ($0/mo) for the 11 idle months. This requires verification with AWS Support — month-to-month switching without penalty is assumed but not confirmed. See [COSTS.md → Plan-Switching Mechanics](./COSTS.md#plan-switching-mechanics--verify-with-aws).
+
+> [!CAUTION]
+> Earlier versions of this table reported "~$816" for the optimized annual — that figure was an arithmetic error. The correct optimized annual is **~$1,117** (with WAF attached year-round) or ~$1,062 (with WAF detached during idle). Keeping WAF attached year-round is recommended for an election platform's security posture.
 
 ### Key Insights
 
-- **Idle cost ~$74/month** — platform costs almost nothing between elections (down from $98 after Glue Catalog free-tier correction)
-- **CloudFront data transfer is the dominant peak-period cost (~67%)** — the new 2026 CloudFront Business flat-rate plan ($200/mo, no overage charges, bundles CDN + WAF + DNS + logging) is the single biggest cost lever and turns the unpredictable election-month burst into a predictable fixed fee
+- **Idle cost ~$65/month** (optimized, Free CF plan, WAF stays attached) — platform costs almost nothing between elections
+- **CloudFront data transfer is the dominant peak-period cost (~67%)** — the 2026 CloudFront Business flat-rate plan ($200/mo, no overage charges, bundles CDN + WAF + DNS + logging) is the single biggest cost lever and turns the unpredictable election-month burst into a predictable fixed fee
 - **Optimized peak month ~$402** with the CloudFront Business plan + Lambda caching + Parameter Store swap
-- **Optimized annual ~$816** — ~90% savings vs the initial EC2 proposal
-- Detailed formulas, verification status, and Mermaid cost-visualization charts are in **[COSTS.md](./COSTS.md)**
-
-| Component | Initial Proposal (EC2) | Est. Cost/mo | Serverless Proposal | Idle/mo | Peak/mo |
-|-----------|------------------------|-------------|---------------------|---------|---------|
-| Web Application | EC2 (m5.large) | $70 | Lambda + API Gateway | $0 | $30 |
-| NoSQL Database | Aerospike (i3.xlarge) | $227 | DynamoDB | $0 | $50 |
-| Relational DB | RDS (db.m5.large) | $130 | Aurora Serverless v2 | $0 | $40 |
-| File Processing | EC2 (c5.xlarge) | $124 | AWS Glue | $0 | $20 |
-| Caching | i3.large EC2 | $113 | DynamoDB (consolidated) | $0 | $15 |
-| Static UI + CDN | N/A | $0 | S3 + CloudFront | $5 | $50 |
-| Raw Data Storage | EBS Volumes | $50 | S3 (Parquet) | $10 | $15 |
-| **Total** | | **$714** | | **$15** | **$220** |
-
-**Savings:** ~70% at peak, ~98% when idle. The serverless proposal costs almost nothing between election cycles.
+- **Optimized annual ~$1,117** with plan-switching (WAF attached year-round) — ~87% savings vs the initial EC2 proposal
+- Detailed formulas, plan-switching mechanics, verification status, and Mermaid cost-visualization charts are in **[COSTS.md](./COSTS.md)**
 
 ---
+
 
 ## Open Action Items
 
