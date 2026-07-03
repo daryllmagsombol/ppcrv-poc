@@ -184,15 +184,35 @@ graph TB
 ### Template Structure
 
 ```yaml
-# template.yaml — single file for the entire stack
+# template.yaml — single file for ALL environments
+# Difference between dev/staging/prod is controlled by Parameters only.
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
 Parameters:
   Environment:
     Type: String
-    Default: dev
     AllowedValues: [dev, staging, prod]
+
+  # ── Sizing parameters (varies per environment) ──
+  AuroraMinACU:
+    Type: Number
+    Default: 0.5
+  AuroraMaxACU:
+    Type: Number
+  GlueWorkers:
+    Type: Number
+  LogLevel:
+    Type: String
+    Default: INFO
+  DomainName:
+    Type: String
+
+  # ── Dev-only: auto-shutdown schedule ──
+  DevAutoShutdown:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
 
 Globals:
   Function:
@@ -201,13 +221,14 @@ Globals:
     Environment:
       Variables:
         ENVIRONMENT: !Ref Environment
+        LOG_LEVEL: !Ref LogLevel
 
 Resources:
   # ── Compute ──
   VoteMetricsFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/metrics/          # SAM builds this directory
+      CodeUri: src/metrics/
       Handler: index.handler
       MemorySize: 256
       Policies:
@@ -274,14 +295,14 @@ Resources:
     Properties:
       Engine: aurora-postgresql
       ServerlessV2ScalingConfiguration:
-        MinCapacity: 0.5
-        MaxCapacity: 16
+        MinCapacity: !Ref AuroraMinACU
+        MaxCapacity: !Ref AuroraMaxACU
 
   # ── Edge (no SAM shorthand, raw CF) ──
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
-      # ... standard CloudFront config
+      # ... standard CloudFront config using !Ref DomainName
 
   # ── ETL ──
   GlueETLJob:
@@ -291,7 +312,7 @@ Resources:
         Name: pythonshell
         ScriptLocation: !Sub s3://pprcv-glue-scripts-${Environment}/etl.py
       WorkerType: G.1X
-      NumberOfWorkers: 10
+      NumberOfWorkers: !Ref GlueWorkers
 
   # ── Observability ──
   Dashboard:
@@ -301,6 +322,51 @@ Resources:
       DashboardBody: !Sub
         - '{ "widgets": [...] }'
         - {}
+```
+
+### Reusable Template — One File, Three Environments
+
+The same `template.yaml` deploys to dev, staging, and prod. Only the **parameters** change:
+
+| Parameter | Dev | Staging | Prod |
+|-----------|-----|---------|------|
+| `AuroraMinACU` | 0.5 | 0.5 | 0.5 |
+| `AuroraMaxACU` | 2 | 8 | 16 |
+| `GlueWorkers` | 2 | 4 | 10 |
+| `LogLevel` | DEBUG | INFO | WARN |
+| `DevAutoShutdown` | true | false | false |
+
+Each environment gets its own `samconfig.toml` that supplies these values — the template stays identical. This means a dev-approved change (e.g., adding a DynamoDB index) flows through staging to prod with no template modification.
+
+```mermaid
+flowchart LR
+    subgraph Template["One Template"]
+        T["template.yaml<br/>(identical across envs)"]:::template
+    end
+
+    subgraph Configs["Per-Environment Config"]
+        DEVCFG["samconfig.dev.toml<br/>ACU: 0.5–2<br/>Workers: 2<br/>LogLevel: DEBUG"]:::dev
+        STGCFG["samconfig.staging.toml<br/>ACU: 0.5–8<br/>Workers: 4<br/>LogLevel: INFO"]:::stg
+        PRODCFG["samconfig.prod.toml<br/>ACU: 0.5–16<br/>Workers: 10<br/>LogLevel: WARN"]:::prod
+    end
+
+    subgraph Stacks["Deployed Stacks"]
+        DEVSTACK["CloudFormation Stack<br/>pprcv-dev"]:::dev
+        STGSTACK["CloudFormation Stack<br/>pprcv-staging"]:::stg
+        PRODSTACK["CloudFormation Stack<br/>pprcv-prod"]:::prod
+    end
+
+    T --> DEVCFG --> DEVSTACK
+    T --> STGCFG --> STGSTACK
+    T --> PRODCFG --> PRODSTACK
+
+    DEVSTACK -.->|"PR: dev → staging"| STGSTACK
+    STGSTACK -.->|"PR: staging → main"| PRODSTACK
+
+    classDef template fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    classDef dev fill:#e8f5e9,stroke:#2e7d32,stroke-width:1px
+    classDef stg fill:#fff3e0,stroke:#f57c00,stroke-width:1px
+    classDef prod fill:#ffebee,stroke:#c62828,stroke-width:1px
 ```
 
 **File size estimate:** A single `template.yaml` for this project would be roughly **400–700 lines** — comparable to the combined Terraform HCL modules (which are split across 7+ files). SAM's shorthand eliminates much of the boilerplate that Terraform requires for IAM roles and API Gateway-Lambda integrations.
