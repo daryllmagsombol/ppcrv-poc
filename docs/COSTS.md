@@ -32,7 +32,7 @@ A comprehensive monthly cost estimate for the PPCRV serverless architecture depl
 
 ## Overview & Scope
 
-This document estimates the monthly cost of running the PPCRV serverless architecture described in [README.md](./README.md). The architecture is compared against the initial EC2-based proposal (`~$714/month` always-on).
+This document estimates the monthly cost of running the PPCRV serverless architecture described in [README.md](../README.md). The architecture is compared against the initial EC2-based proposal (`~$714/month` always-on).
 
 The cost model splits each month into:
 - **Peak period** — 2 consecutive days (~48 hours) when election results are actively queried

@@ -532,12 +532,12 @@ sequenceDiagram
 ## Cost Comparison
 
 > [!NOTE]
-> This is a summary. For the full per-service breakdown, formulas, optimization recommendations, and annual projections, see **[COSTS.md](./COSTS.md)**.
+> This is a summary. For the full per-service breakdown, formulas, optimization recommendations, and annual projections, see **[COSTS.md](./docs/COSTS.md)**.
 
 ### Architecture-Level Cost Comparison (High Level)
 
 > [!NOTE]
-> Per-component figures below are illustrative roll-ups. The Comprehensive Monthly Estimate table further down shows audited totals from [COSTS.md](./COSTS.md) (corrected 2026-07-03 against AWS ap-southeast-1 public pricing).
+> Per-component figures below are illustrative roll-ups. The Comprehensive Monthly Estimate table further down shows audited totals from [COSTS.md](./docs/COSTS.md) (corrected 2026-07-03 against AWS ap-southeast-1 public pricing).
 
 | Component | Initial Proposal (EC2) | Est. Cost/mo | Serverless Proposal | Idle/mo | Peak/mo |
 |-----------|------------------------|-------------|---------------------|---------|---------|
@@ -556,12 +556,12 @@ sequenceDiagram
 | **Subtotal** | | **$714** | | **$98** | **$548** |
 
 > [!IMPORTANT]
-> The initial EC2 estimate above reflects the always-on line-item baseline only and excludes peak data-transfer costs. The peak column for the Serverless proposal reflects pay-as-you-go (CloudFront data transfer at $0.140/GB in ap-southeast-1). See the [Comparison section in COSTS.md](./COSTS.md#comparison-with-initial-ec2-proposal) for the apples-to-apples annual comparison including the CloudFront Business flat-rate plan.
+> The initial EC2 estimate above reflects the always-on line-item baseline only and excludes peak data-transfer costs. The peak column for the Serverless proposal reflects pay-as-you-go (CloudFront data transfer at $0.140/GB in ap-southeast-1). See the [Comparison section in COSTS.md](./docs/COSTS.md#comparison-with-initial-ec2-proposal) for the apples-to-apples annual comparison including the CloudFront Business flat-rate plan.
 
 ### Comprehensive Monthly Estimate (50M Peak Requests, ap-southeast-1)
 
 > [!NOTE]
-> Audited 2026-07-03 — prices verified against AWS ap-southeast-1 public pricing where possible. CloudFront + WAF rates verified directly from AWS pricing pages; other per-service rates are knowledge-based and flagged in [COSTS.md Notes & Disclaimers](./COSTS.md#notes--disclaimers). Added previously-missed services: **Route 53 DNS, Secrets Manager, S3 request ops, WAF vended logs, DynamoDB optional features**.
+> Audited 2026-07-03 — prices verified against AWS ap-southeast-1 public pricing where possible. CloudFront + WAF rates verified directly from AWS pricing pages; other per-service rates are knowledge-based and flagged in [COSTS.md Notes & Disclaimers](./docs/COSTS.md#notes--disclaimers). Added previously-missed services: **Route 53 DNS, Secrets Manager, S3 request ops, WAF vended logs, DynamoDB optional features**.
 
 For an election month with **50M requests over a 2-day peak window** in the **ap-southeast-1 (Singapore)** region:
 
@@ -592,7 +592,7 @@ For an election-cycle year (1 peak month + 11 idle months):
 **Annual savings vs the initial EC2 proposal: ~83% (un-optimized) to ~87% (optimized with CloudFront plan-switching, WAF stays attached).**
 
 > [!IMPORTANT]
-> The optimized scenario assumes **CloudFront plan-switching**: subscribe to the Business plan ($200/mo, no overage charges, bundles CDN + WAF + DNS + logging) for the single election month, then drop to the Free plan ($0/mo) for the 11 idle months. This requires verification with AWS Support — month-to-month switching without penalty is assumed but not confirmed. See [COSTS.md → Plan-Switching Mechanics](./COSTS.md#plan-switching-mechanics--verify-with-aws).
+> The optimized scenario assumes **CloudFront plan-switching**: subscribe to the Business plan ($200/mo, no overage charges, bundles CDN + WAF + DNS + logging) for the single election month, then drop to the Free plan ($0/mo) for the 11 idle months. This requires verification with AWS Support — month-to-month switching without penalty is assumed but not confirmed. See [COSTS.md → Plan-Switching Mechanics](./docs/COSTS.md#plan-switching-mechanics--verify-with-aws).
 
 > [!CAUTION]
 > Earlier versions of this table reported "~$816" for the optimized annual — that figure was an arithmetic error. The correct optimized annual is **~$1,117** (with WAF attached year-round) or ~$1,062 (with WAF detached during idle). Keeping WAF attached year-round is recommended for an election platform's security posture.
@@ -603,7 +603,7 @@ For an election-cycle year (1 peak month + 11 idle months):
 - **CloudFront data transfer is the dominant peak-period cost (~67%)** — the 2026 CloudFront Business flat-rate plan ($200/mo, no overage charges, bundles CDN + WAF + DNS + logging) is the single biggest cost lever and turns the unpredictable election-month burst into a predictable fixed fee
 - **Optimized peak month ~$402** with the CloudFront Business plan + Lambda caching + Parameter Store swap
 - **Optimized annual ~$1,117** with plan-switching (WAF attached year-round) — ~87% savings vs the initial EC2 proposal
-- Detailed formulas, plan-switching mechanics, verification status, and Mermaid cost-visualization charts are in **[COSTS.md](./COSTS.md)**
+- Detailed formulas, plan-switching mechanics, verification status, and Mermaid cost-visualization charts are in **[COSTS.md](./docs/COSTS.md)**
 
 ---
 
@@ -644,10 +644,27 @@ Items from the architecture draft that require further investigation:
 | Queue / DLQ | Amazon SQS |
 | Observability | CloudWatch + X-Ray |
 | Ad-hoc Queries | Amazon Athena (SQL on S3 Parquet) |
-| IaC | AWS CDK / SAM / Terraform (TBD) |
+| IaC | Terraform (see [TERRAFORM.md](./docs/TERRAFORM.md)) |
+
+---
+
+## Terraform Infrastructure
+
+Infrastructure is provisioned via **Terraform** with a **GitHub Actions** CI/CD pipeline using **OIDC authentication** (no static AWS keys).
+
+| Aspect | Approach |
+|--------|----------|
+| **Modules** | `network/`, `compute/`, `storage/`, `etl/`, `messaging/`, `observability/`, `iam/` |
+| **State** | Remote S3 backend + DynamoDB locking |
+| **Auth** | GitHub OIDC (short-lived JWT → `AssumeRoleWithWebIdentity`) |
+| **CI/CD** | Plan on PR (posted as comment), auto-apply on merge to `main` |
+| **Environments** | `dev` → `staging` → `prod`, each fully isolated |
+| **Dev cost** | ~$0.11/mo (S3 + DynamoDB for state); GitHub Actions free tier |
+
+**Full details:** [docs/TERRAFORM.md](./docs/TERRAFORM.md) — includes 5 UML diagrams (module architecture, OIDC auth flow, CI/CD activity, multi-environment deployment, full lifecycle sequence).
 
 ---
 
 ## Change Log
 
-All changes to this repository's documentation are tracked in **[CHANGES.md](./CHANGES.md)**. See that file for a full version history of edits to README.md, COSTS.md, and other project documents.
+All changes to this repository's documentation are tracked in **[CHANGES.md](./docs/CHANGES.md)**. See that file for a full version history of edits to README.md, COSTS.md, and other project documents.
