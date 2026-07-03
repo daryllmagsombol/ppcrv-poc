@@ -644,13 +644,13 @@ Items from the architecture draft that require further investigation:
 | Queue / DLQ | Amazon SQS |
 | Observability | CloudWatch + X-Ray |
 | Ad-hoc Queries | Amazon Athena (SQL on S3 Parquet) |
-| IaC | Terraform (see [TERRAFORM.md](./docs/TERRAFORM.md)) |
+| IaC | Terraform or CloudFormation/SAM (see [comparison](./docs/CLOUDFORMATION.md)) |
 
 ---
 
 ## Terraform Infrastructure
 
-Infrastructure is provisioned via **Terraform** with a **GitHub Actions** CI/CD pipeline using **OIDC authentication** (no static AWS keys).
+Infrastructure will be provisioned via **Infrastructure-as-Code**. The current design docs explore two options — **[Terraform](./docs/TERRAFORM.md)** (HCL, modular, multi-provider) and **[CloudFormation/SAM](./docs/CLOUDFORMATION.md)** (managed state, unified code+infra pipeline). See the comparison below and the linked docs for the full trade-off analysis.
 
 | Aspect | Approach |
 |--------|----------|
@@ -662,6 +662,9 @@ Infrastructure is provisioned via **Terraform** with a **GitHub Actions** CI/CD 
 | **Dev cost** | ~$29/mo (scaled-down AWS stack with auto-shutdown) + ~$0.11/mo (Terraform state); see **[COSTS-DEV.md](./docs/COSTS-DEV.md)** |
 
 **Full details:** [docs/TERRAFORM.md](./docs/TERRAFORM.md) — includes 5 UML diagrams (module architecture, OIDC auth flow, CI/CD activity, multi-environment deployment, full lifecycle sequence).
+
+> [!NOTE]
+> Interested in CloudFormation/SAM instead? See [docs/CLOUDFORMATION.md](./docs/CLOUDFORMATION.md) for a side-by-side comparison, sample template, migration path, and recommendation.
 
 ---
 

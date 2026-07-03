@@ -27,6 +27,31 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-03 — Created CloudFormation/SAM exploration document (CLOUDFORMATION.md)
+
+**Files changed:** `docs/CLOUDFORMATION.md` (new), `docs/TERRAFORM.md`, `README.md`
+**Author:** Team Leader (Claude)
+**Summary:** Created a comprehensive document exploring what the PPCRV platform would look like using AWS CloudFormation + SAM instead of Terraform. Since Terraform hasn't been written yet (greenfield project), the document is a side-by-side comparison for choosing which IaC tool to start with.
+
+### What changed
+- Created `docs/CLOUDFORMATION.md` with:
+  - SAM template architecture — how the 7 planned modules map to SAM/CF resources
+  - Example `template.yaml` structure showing Lambda, DynamoDB, Aurora, CloudFront, Glue
+  - Single-pipeline CI/CD workflow using `sam build && sam deploy`
+  - Multi-environment strategy using `samconfig.toml` per environment
+  - Greenfield setup-time comparison (no migration needed)
+  - Side-by-side comparison table (Terraform vs SAM across 12 criteria)
+  - Recommendation: **SAM/CloudFormation** as the better starting point for a pure-AWS serverless project
+- Updated `docs/TERRAFORM.md` — added disclaimer at top that this is a proposal, not a live setup
+- Updated `README.md` — changed "Infrastructure is provisioned via Terraform" to "Infrastructure will be provisioned via Infrastructure-as-Code" with links to both options
+
+### Why
+- The user clarified Terraform hasn't been implemented yet — this changes the decision from "should we migrate?" to "which tool should we start with?"
+- Without the migration cost anchor, SAM's unified pipeline and managed state make it the stronger default for a pure-AWS serverless project
+- Both options remain documented so the team can make an informed choice
+
+---
+
 ## 2026-07-03 — Created dev environment cost estimate (COSTS-DEV.md)
 
 **Files changed:** `docs/COSTS-DEV.md` (new), `README.md`

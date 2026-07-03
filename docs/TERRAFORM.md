@@ -1,6 +1,9 @@
 # PPCRV — Terraform Infrastructure Strategy
 
-Infrastructure-as-Code approach for the PPCRV serverless election monitoring platform on AWS, using **Terraform** with **GitHub Actions** CI/CD and **OIDC** authentication.
+Proposed Infrastructure-as-Code approach for the PPCRV serverless election monitoring platform on AWS, using **Terraform** with **GitHub Actions** CI/CD and **OIDC** authentication.
+
+> [!NOTE]
+> This is a **proposal** — no Terraform code has been written yet. The IaC choice is still open. See [CLOUDFORMATION.md](./CLOUDFORMATION.md) for the SAM/CloudFormation alternative and a side-by-side comparison.
 
 ---
 
