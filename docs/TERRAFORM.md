@@ -654,15 +654,16 @@ sequenceDiagram
 
 ```mermaid
 gitGraph
-    commit
+    commit id: "init"
     branch dev
     checkout dev
-    commit id: "feature/foo"
-    commit id: "feature/bar"
+    commit id: "feature/a"
+    commit id: "feature/b"
     checkout main
     merge dev id: "PR → dev" tag: "auto-apply"
+    branch staging
     checkout dev
-    commit id: "feature/baz"
+    commit id: "feature/c"
     checkout staging
     merge dev id: "PR → staging" tag: "auto-apply"
     checkout main
