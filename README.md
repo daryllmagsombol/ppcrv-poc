@@ -15,6 +15,7 @@ A serverless election monitoring platform for Philippine elections. Volunteers u
 - [Request Flows](#request-flows)
 - [Cost Comparison](#cost-comparison)
 - [Open Action Items](#open-action-items)
+- [Change Log](#change-log)
 
 ---
 
@@ -530,6 +531,61 @@ sequenceDiagram
 
 ## Cost Comparison
 
+> [!NOTE]
+> This is a summary. For the full per-service breakdown, formulas, optimization recommendations, and annual projections, see **[COSTS.md](./COSTS.md)**.
+
+### Architecture-Level Cost Comparison (High Level)
+
+| Component | Initial Proposal (EC2) | Est. Cost/mo | Serverless Proposal | Idle/mo | Peak/mo |
+|-----------|------------------------|-------------|---------------------|---------|---------|
+| Web Application | EC2 (m5.large) | $70 | Lambda + API Gateway | $0 | $83 |
+| NoSQL Database | Aerospike (i3.xlarge) | $227 | DynamoDB | $1 | $22 |
+| Relational DB | RDS (db.m5.large) | $130 | Aurora Serverless v2 | $39 | $11 |
+| File Processing | EC2 (c5.xlarge) | $124 | AWS Glue | $5 | $10 |
+| Caching | i3.large EC2 | $113 | DynamoDB (consolidated) | $0 | $0 |
+| Static UI + CDN | N/A | $0 | S3 + CloudFront + WAF | $5 | $389 |
+| Raw Data Storage | EBS Volumes | $50 | S3 (Parquet) | $3 | $0 |
+| Observability | N/A | $0 | CloudWatch + X-Ray | $42 | $0 |
+| Messaging | N/A | $0 | SNS + SQS | $2 | $0 |
+| Analytics | N/A | $0 | Athena | $2 | $0 |
+| **Subtotal** | | **$714** | | **$98** | **$511** |
+
+> [!IMPORTANT]
+> The initial EC2 estimate above reflects the always-on line-item baseline only. It does **not** include peak live data-transfer costs (CloudFront/ALB to viewers), which the EC2 architecture would also incur (~$180–$400 extra in the peak month). See the [Comparison section in COSTS.md](./COSTS.md#comparison-with-initial-ec2-proposal) for the apples-to-apples annual comparison.
+
+### Comprehensive Monthly Estimate (50M Peak Requests, ap-southeast-1)
+
+For an election month with **50M requests over a 2-day peak window** in the **ap-southeast-1 (Singapore)** region:
+
+| Cost Category | Monthly Cost (USD) |
+|---------------|---------------------|
+| Edge & Networking (CloudFront, WAF, Data Transfer) | $393.81 |
+| Compute (API Gateway, Lambda ×3, AWS Glue) | $115.07 |
+| Database (Aurora Serverless v2, DynamoDB) | $73.34 |
+| Observability (CloudWatch, X-Ray) | $41.50 |
+| Storage (S3) | $3.10 |
+| Messaging (SNS, SQS) | $2.00 |
+| Ad-Hoc Analytics (Athena) | $1.60 |
+| **Monthly Total (Un-Optimized)** | **$630.42** |
+| **Monthly Total (Optimized with caching)** | **~$367** |
+
+### Annual Projection
+
+| Scenario | Annual Cost (USD) |
+|----------|-------------------|
+| Initial EC2 Proposal (always-on) | ~$8,750 |
+| Serverless (Un-Optimized) | ~$1,710 |
+| Serverless (Optimized) | ~$1,445 |
+
+**Annual savings vs the initial EC2 proposal: ~80% (un-optimized) to ~83% (optimized).**
+
+### Key Insights
+
+- **Idle cost ~$98/month** — platform costs almost nothing between elections
+- **Data transfer accounts for ~53%** of peak-month cost — optimizing frontend bundle size has the highest leverage
+- **Optimized cost ~$367/month** during election month with aggressive CloudFront caching and small bundle size
+- Detailed formulas, per-service breakdown, and Mermaid cost-visualization charts are in **[COSTS.md](./COSTS.md)**
+
 | Component | Initial Proposal (EC2) | Est. Cost/mo | Serverless Proposal | Idle/mo | Peak/mo |
 |-----------|------------------------|-------------|---------------------|---------|---------|
 | Web Application | EC2 (m5.large) | $70 | Lambda + API Gateway | $0 | $30 |
@@ -582,3 +638,9 @@ Items from the architecture draft that require further investigation:
 | Observability | CloudWatch + X-Ray |
 | Ad-hoc Queries | Amazon Athena (SQL on S3 Parquet) |
 | IaC | AWS CDK / SAM / Terraform (TBD) |
+
+---
+
+## Change Log
+
+All changes to this repository's documentation are tracked in **[CHANGES.md](./CHANGES.md)**. See that file for a full version history of edits to README.md, COSTS.md, and other project documents.
