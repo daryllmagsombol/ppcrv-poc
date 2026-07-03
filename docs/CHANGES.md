@@ -27,6 +27,82 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-03 — Created dev environment cost estimate (COSTS-DEV.md)
+
+**Files changed:** `docs/COSTS-DEV.md` (new), `README.md`
+**Author:** Team Leader (Claude)
+**Summary:** Created a cost estimate for the shared dev AWS environment — scaled-down version of the full production stack for 3 developers with auto-shutdown via EventBridge Scheduler.
+
+### What changed
+- Created `docs/COSTS-DEV.md` with:
+  - Assumptions & Schedule (3 devs, weekdays, same TZ, ~9h/day)
+  - Auto-shutdown strategy (Aurora paused after hours and weekends via EventBridge Scheduler)
+  - Per-service cost breakdown for all 12+ AWS services (scaled down)
+  - Monthly summary (~$29 realistic floor / ~$36 budget)
+  - Annual projection (~$348/year)
+  - Comparison with production costs
+  - Implementation guidance for the auto-shutdown cron rules
+- Updated `README.md` Terraform section: dev cost line changed from "~$0.11/mo (S3 + DynamoDB for state)" to "~$29/mo (scaled-down AWS stack with auto-shutdown) + ~$0.11/mo (Terraform state); see COSTS-DEV.md"
+
+### Why
+- The user needs a realistic dev budget for the shared AWS account
+- Auto-shutdown is the critical optimization — Aurora's 0.5 ACU minimum costs ~$29/mo 24/7, but only ~$8/mo with scheduled pauses
+- Having dev cost documented alongside prod cost gives the team full visibility into monthly AWS spend
+
+---
+
+## 2026-07-03 — Removed duplicate outdated architecture-level comparison table from README.md
+
+**Files changed:** `README.md`
+**Author:** Team Leader (Claude)
+**Summary:** The old simplified architecture comparison table (showing $15 idle / $220 peak) was a duplicate left behind when the updated detailed table ($98 idle / $548 peak with Route 53, Secrets Manager, Observability) was added. Removed the stale duplicate.
+
+### What changed
+- Removed the duplicate table and its "Savings: ~70% at peak..." caption from the Cost Comparison section
+- The correct, updated Architecture-Level table (line 542) remains
+- No data loss — the old table's values contradicted the audited totals in COSTS.md
+
+### Why
+- The table was a stale duplicate from the pre-audit draft
+- Two tables with different numbers was confusing and risked the wrong numbers being cited
+
+---
+
+## 2026-07-03 — Fixed arithmetic error in optimized annual projection; documented CloudFront plan-switching model
+
+**Files changed:** `docs/COSTS.md`, `README.md`
+**Author:** Team Leader (Claude)
+**Summary:** The user asked whether the CloudFront Business plan is meant to be subscribed only for the election month — that question exposed a real arithmetic error. The optimized annual had been reported as **~$816/year** in one section and **~$875/year** in another (both wrong). Recomputed with a proper plan-switching model and corrected to **~$1,117/year**.
+
+### Root cause
+The previous optimized annual equation was: "$402 (peak) + 11 × ~$74 (idle) = ~$816/year". This was wrong on two counts:
+1. **Arithmetic** — $402 + (11 × $74) = **$1,216**, not $816. A character transposition error.
+2. **Idle baseline** — $74 was inherited from the un-optimized idle, which included pay-as-you-go CloudFront/Route 53/Secrets line items that are absorbed or zeroed under the optimized plan-switching scenario. The correct optimized idle baseline is **~$65** (not $74).
+
+### What changed — COSTS.md
+- Replaced the vague "annual (with 11 idle months @ ~$74)" with an explicit plan-switching model table
+- Added "Plan-Switching Mechanics — Verify With AWS" subsection listing assumptions that must be confirmed (month-to-month switching, WAF attachment, etc.)
+- Added two idle scenarios: WAF attached (~$65/mo, recommended) vs WAF detached (~$60/mo)
+- Itemized the idle month breakdown so $65/month is auditable
+- Updated Comparison with Initial EC2 Proposal table: $1,117 (WAF attached) / $1,062 (WAF detached) instead of $816
+- Updated xychart-beta bar from `[8750, 1517, 816]` to `[8750, 1517, 1117]`
+- Updated savings claim from "~90% cheaper" to "~87% cheaper (WAF attached) / ~88% (WAF detached)"
+- Added CAUTION callout explicitly noting the arithmetic error and correction
+
+### What changed — README.md
+- Annual Projection table: added ~$1,062 (WAF detached) row; corrected optimized column to ~$1,117
+- Updated Key Insights: idle ~$65/mo (was $74), annual ~$1,117 (was $816), savings ~87% (was ~90%)
+- Added IMPORTANT callout describing the plan-switching assumption
+- Added CAUTION callout explicitly noting the $816 was an arithmetic error
+- Comprehensive Monthly Estimate: added "Optimized idle — CF Free plan, WAF attached" row (~$65)
+
+### Why
+- The user's question "do I only subscribe for one month?" was the right question — it forced a re-examination of the cost model and exposed both an arithmetic error and a logical inconsistency
+- The correct ~$1,117 is still ~87% cheaper than the EC2 proposal (~$8,750/year), which is the real story
+- Documenting the plan-switching model creates a verification checkpoint — the entire optimized scenario depends on month-to-month switching being possible
+
+---
+
 ## 2026-07-03 — Synced README Cost Comparison with audited COSTS.md totals
 
 **Files changed:** `README.md`

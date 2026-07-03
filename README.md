@@ -659,7 +659,7 @@ Infrastructure is provisioned via **Terraform** with a **GitHub Actions** CI/CD 
 | **Auth** | GitHub OIDC (short-lived JWT → `AssumeRoleWithWebIdentity`) |
 | **CI/CD** | Plan on PR (posted as comment), auto-apply on merge to `main` |
 | **Environments** | `dev` → `staging` → `prod`, each fully isolated |
-| **Dev cost** | ~$0.11/mo (S3 + DynamoDB for state); GitHub Actions free tier |
+| **Dev cost** | ~$29/mo (scaled-down AWS stack with auto-shutdown) + ~$0.11/mo (Terraform state); see **[COSTS-DEV.md](./docs/COSTS-DEV.md)** |
 
 **Full details:** [docs/TERRAFORM.md](./docs/TERRAFORM.md) — includes 5 UML diagrams (module architecture, OIDC auth flow, CI/CD activity, multi-environment deployment, full lifecycle sequence).
 
