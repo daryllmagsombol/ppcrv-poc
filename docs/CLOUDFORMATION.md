@@ -745,5 +745,5 @@ The comparison is close enough that **either choice is fine** — what matters m
 | CloudFormation Resource Types | https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-template-resource-type-ref.html |
 | Terraform AWS Provider | https://registry.terraform.io/providers/hashicorp/aws/latest/docs |
 | Terraform proposal | [docs/TERRAFORM.md](./TERRAFORM.md) |
-| Production cost estimate | [docs/COSTS.md](./COSTS.md) |
+| Production cost estimate | [cost-arch-v1.md](cost-arch-v1.md) |
 | Dev cost estimate | [docs/COSTS-DEV.md](./COSTS-DEV.md) |

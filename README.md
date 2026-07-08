@@ -1,6 +1,6 @@
-# PPCRV — Parish Pastoral Council for Responsible Voting
+# PPCRV v3 — Cloud-Agnostic Election Monitoring Platform
 
-A serverless election monitoring platform for Philippine elections. Volunteers upload precinct CSV data, the system validates and processes it, and the public views aggregated vote results in real time.
+A cloud-agnostic election monitoring platform for Philippine elections. Volunteers upload precinct CSV data, the system validates and processes it, and the public views aggregated vote results in real time. Built on **AWS Fargate containers** with a clear path to **GCP Cloud Run** and **Azure Container Apps**.
 
 ---
 
@@ -8,13 +8,19 @@ A serverless election monitoring platform for Philippine elections. Volunteers u
 
 - [Project Overview](#project-overview)
 - [Problem Statement](#problem-statement)
-- [Proposed Serverless Architecture](#proposed-serverless-architecture)
-- [AWS Glue ETL Pipeline](#aws-glue-etl-pipeline)
+- [Architecture](#architecture)
+- [Component Breakdown](#component-breakdown)
 - [Data Storage Strategy](#data-storage-strategy)
-- [Data Accuracy & Integrity](#data-accuracy--integrity)
+- [ETL Pipeline — Redis Job Queue](#etl-pipeline--redis-job-queue)
 - [Request Flows](#request-flows)
+- [Data Accuracy & Integrity](#data-accuracy--integrity)
+- [Redis Rebuild (Auto-Shutdown)](#redis-rebuild-auto-shutdown)
+- [Cloud Portability](#cloud-portability)
 - [Cost Comparison](#cost-comparison)
-- [Open Action Items](#open-action-items)
+- [Tech Stack Summary](#tech-stack-summary)
+- [Project Structure](#project-structure)
+- [Infrastructure](#infrastructure)
+- [Open Items](#open-items)
 - [Change Log](#change-log)
 
 ---
@@ -43,587 +49,475 @@ A serverless election monitoring platform for Philippine elections. Volunteers u
 | `OVERVOTE` | Overvote count |
 | `RECEPTION_DATE` | Date/time the return was received |
 
-**Scale:** ~32 million rows per election cycle across multiple CSV uploads (up to 2GB per file).
+**Scale:** ~32 million rows per election cycle across multiple CSV uploads (up to 2GB per file). Public query load: up to 50 million requests over a 2-day election window.
 
 ---
 
 ## Problem Statement
 
-PPCRV is a **greenfield project** with no existing deployed system. An initial architecture proposal used always-on EC2 instances, but this presents a cost and maintenance problem for an application that is only heavily used during election periods and otherwise idle.
+PPCRV is a **greenfield project** with no existing deployed system. An initial architecture proposal used always-on EC2 instances, but this was too expensive for an application that is only heavily used during election periods and otherwise idle. The architecture has evolved through three iterations:
 
-### Initial Proposal (EC2-Based)
+- **v1** — Fully serverless (Lambda, API Gateway, Glue, DynamoDB). **Fastest cold starts, but 10+ AWS-specific services.**
+- **v2** — Fargate containers + DynamoDB + Aurora. **Portable compute, but still 8+ cloud-specific services.**
+- **v3 (current)** — Fargate containers + Redis + Aurora SQL. **Only 5 services per cloud. Fewer interfaces. Lower cost.**
 
-The first proposal relied on provisioned EC2 instances for every layer:
+### Why Cloud-Agnostic?
 
-| Component | Initial Proposal | Drawback |
-|-----------|-----------------|----------|
-| Web Application | EC2 (m5.large) | Always running, even when idle |
-| Validation Service | EC2 (m5.large, NodeJS) | Always running, even when idle |
-| ETL Server | EC2 (c5.xlarge) | Manual batch processing, no auto-scaling |
-| Load Balancers | ALB (app + data) | Over-provisioned |
-| Static Web Server | EC2 | Unnecessary for static content |
-| Relational DB | RDS (db.m5.large) | Always running |
-| NoSQL Cache | Aerospike on EC2 (i3.xlarge) | Self-managed, expensive |
-| Cache Cluster | i3.large EC2 | Self-managed, expensive |
+The organization may need to run on **GCP** or **Azure** in the future. v3 chooses services with near-identical equivalents on all three clouds:
 
-**Estimated cost:** ~$714/month — paid even when the app is completely idle between elections.
-
-### Why Serverless Instead
-
-The initial proposal's main weakness is paying for idle capacity during the 99% of time the app is not in active use. A serverless approach is a better fit because:
-
-- **Elections are bursty** — traffic spikes during election periods, then drops to near-zero
-- **Cost scales with usage** — pay only when requests arrive or jobs run
-- **No server maintenance** — no patching, scaling, or OS management
-- **Automatic scaling** — handles traffic spikes without capacity planning
+| Principle | Implementation |
+|-----------|---------------|
+| **Docker images run everywhere** | Same API and ETL containers on Fargate, Cloud Run, or Container Apps |
+| **Standard protocols > cloud APIs** | Redis (`redis-py`) and Postgres (`psycopg2`) use standard protocols — no cloud-specific SDKs |
+| **Minimal interfaces** | Only 2 per-cloud implementations (Storage, Messaging) instead of 4 in v2 |
+| **One env var switches clouds** | `CLOUD_PROVIDER=aws|gcp|azure` |
 
 ---
 
-## Proposed Serverless Architecture
-
-The revised proposal replaces the initial EC2-based design with fully serverless AWS services. The system scales to zero when idle and scales automatically during election traffic spikes.
-
-### Architecture Diagram
+## Architecture
 
 ```mermaid
 graph TB
-    %% --- Clients ---
-    Public[Public Clients<br/>Access UI + Query Metrics]
-    Volunteer[Volunteer Clients<br/>Validate + Upload CSV]
-
-    %% --- Edge Layer ---
-    CloudFront[Amazon CloudFront<br/>+ AWS WAF<br/>CDN / Edge Cache / DDoS]
-    S3UI[S3 Static UI<br/>Frontend Host]
-
-    Public -->|Access UI| CloudFront
-    CloudFront -->|Static HTML| S3UI
-
-    %% --- API Layer ---
-    APIGW[Amazon API Gateway<br/>Throttling + Rate Limiting]
-
-    Volunteer -->|Validate API| APIGW
-    Public -->|Query Metrics| APIGW
-
-    %% --- Compute: Validation Path ---
-    LambdaVal[Lambda Validation<br/>Checksum + QR Cross-check]
-    Aurora[Aurora Serverless v2<br/>Validation Records DB]
-
-    APIGW -->|Validation Route| LambdaVal
-    LambdaVal -->|Insert records| Aurora
-
-    %% --- Compute: Metrics Path ---
-    LambdaMet[Lambda Vote Metrics<br/>Reads aggregated results]
-    DDBMetrics[DynamoDB<br/>Aggregated Vote Metrics]
-
-    APIGW -->|Metrics Route| LambdaMet
-    LambdaMet -->|Query cache| DDBMetrics
-
-    %% --- ETL Path ---
-    S3Upload[S3 CSV Upload Bucket<br/>Volunteer uploads up to 2GB]
-    LambdaTrig[Lambda Event Trigger<br/>S3 ObjectCreated event]
-    Glue[AWS Glue ETL Job<br/>Parse + Aggregate<br/>Idempotent / Re-runnable]
-    S3Parquet[S3 Parquet<br/>Raw Data - Source of Truth<br/>Audit Trail]
-    DDBCtrl[DynamoDB Control Table<br/>Precinct Status Tracking]
-    SNS[SNS<br/>Failure / Success Alerts]
-    SQS[SQS DLQ<br/>Failed Invocations]
-
-    Volunteer -->|Upload CSV| S3Upload
-    S3Upload -->|S3 Event| LambdaTrig
-    LambdaTrig -->|StartJobRun| Glue
-    Glue -->|Write raw data| S3Parquet
-    Glue -->|Write metrics| DDBMetrics
-    Glue -->|Update status| DDBCtrl
-    Glue -->|Failure alert| SNS
-    LambdaTrig -.->|Dead letter| SQS
-
-    %% --- Observability ---
-    CW[CloudWatch + X-Ray<br/>Alarms / Dashboards / Tracing]
-    Glue -.->|Metrics + logs| CW
-    LambdaVal -.->|Metrics| CW
-    LambdaMet -.->|Metrics| CW
-
-    %% --- Styling ---
     classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
     classDef edge fill:#fff3e0,stroke:#f57c00,stroke-width:2px
     classDef compute fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    classDef new fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
     classDef storage fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    classDef etl fill:#fce4ec,stroke:#c62828,stroke-width:2px
+    classDef db fill:#fce4ec,stroke:#c62828,stroke-width:2px
     classDef obs fill:#eceff1,stroke:#546e7a,stroke-width:1px,stroke-dasharray: 5 5
 
-    class Public,Volunteer client
-    class CloudFront,S3UI,APIGW edge
-    class LambdaVal,LambdaMet,LambdaTrig compute
-    class Aurora,DDBMetrics,DDBCtrl,SQS storage
-    class S3Upload,S3Parquet,Glue,SNS etl
-    class CW obs
+    subgraph Ext["External Clients"]
+        Public[Public Clients<br/>Access UI + Query]
+        Volunteer[Volunteer Clients<br/>Validate + Upload CSV]
+    end
+
+    subgraph AWS["AWS Cloud"]
+        CF[CloudFront + WAF<br/>CDN / Edge Cache / DDoS]:::edge
+        S3UI[S3 Static UI<br/>Frontend Host]:::storage
+        ALB[ALB<br/>Throttling + Health Checks]:::edge
+
+        subgraph Fargate["Fargate Containers"]
+            API[API Container<br/>FastAPI / Express<br/>Routes: /metrics, /validate]:::compute
+            ETL[ETL Container<br/>Python + DuckDB<br/>BRPOP from Redis queue]:::compute
+        end
+
+        Trigger[Lambda Trigger<br/>S3 ObjectCreated<br/>LPUSH to Redis]:::compute
+        CW[CloudWatch + X-Ray<br/>Alarms / Dashboards]:::obs
+
+        S3Upload[S3 CSV Upload]:::storage
+        S3Parquet[S3 Parquet<br/>Audit Trail]:::storage
+
+        subgraph Redis["Redis — Single Instance"]
+            Cache[(Vote Metrics<br/>PRECINCT:*, CONTEST:*)]:::new
+            Queue[(Job Queue<br/>etl:queue / etl:processing / etl:failed)]:::new
+            PubSub[(Pub/Sub<br/>etl:done / etl:error)]:::new
+        end
+
+        Aurora[(Aurora Serverless v2<br/>Postgres — Validation Records)]:::db
+        SQS[SQS DLQ<br/>Failed Invocations]:::storage
+        SNS[SNS<br/>Operator Alerts]:::storage
+        Rebuild[Redis Rebuild<br/>Scheduled + Startup]:::compute
+    end
+
+    Public -->|Access UI| CF
+    Public -->|Query Metrics| CF
+    Volunteer -->|Validate API| CF
+    Volunteer -->|Upload CSV| S3Upload
+
+    CF -->|Static HTML| S3UI
+    CF -->|API Routes| ALB
+    ALB --> API
+
+    API -->|GET/SET metrics| Cache
+    API -->|INSERT records| Aurora
+    API -.->|Metrics + logs| CW
+
+    S3Upload -->|S3 Event| Trigger
+    Trigger -->|LPUSH files| Queue
+    ETL -->|BRPOP tasks| Queue
+    ETL -->|Download CSV| S3Upload
+    ETL -->|Write Parquet| S3Parquet
+    ETL -->|Write metrics| Cache
+    ETL -->|PUBLISH done| PubSub
+    API -.->|SUBSCRIBE done<br/>Invalidate cache| PubSub
+    ETL -.->|Failure alert| SNS
+    ETL -.->|Metrics + logs| CW
+    Trigger -.->|Dead letter| SQS
+    SQS -->|Alert| SNS
+
+    Rebuild -->|Query Parquet| S3Parquet
+    Rebuild -->|Rebuild metrics| Cache
 ```
-
-### Component Breakdown
-
-| Component | Service | Initial Proposal | Purpose |
-|-----------|---------|----------|---------|
-| CDN + Edge Cache | CloudFront + WAF | ALB + Static EC2 | Serves static UI, DDoS protection, rate limiting |
-| Static UI Hosting | S3 | Static Web Server (EC2) | Hosts frontend application |
-| API Layer | API Gateway | Application + Data ALBs | Routes requests to Lambda functions |
-| Validation Compute | Lambda (Validation) | NodeJS Validation Service (m5.large) | Validates checksums, cross-checks QR codes |
-| Metrics Compute | Lambda (Vote Metrics) | Web Application (m5.large) | Queries aggregated results from DynamoDB |
-| ETL Compute | AWS Glue | ETL Server (c5.xlarge) | Parses + aggregates CSV data |
-| Relational DB | Aurora Serverless v2 | RDS (db.m5.large) | Stores validation records |
-| NoSQL Cache | DynamoDB | Aerospike + i3 Cache | Stores aggregated vote metrics |
-| Raw Data Storage | S3 (Parquet) | EBS Volumes | Source of truth / audit trail |
-| Event Trigger | Lambda (S3 Event) | N/A | Triggers Glue on CSV upload |
-| Failure Alerts | SNS | N/A | Notifies on Glue/Lambda failures |
-| Dead Letter Queue | SQS DLQ | N/A | Captures failed Lambda invocations |
-| Observability | CloudWatch + X-Ray | N/A | Monitoring, alarms, tracing, dashboards |
 
 ---
 
-## AWS Glue ETL Pipeline
+## Component Breakdown
 
-The ETL pipeline is the core of the data processing flow. AWS Glue replaces the initial proposal's c5.xlarge ETL server with a fully managed, pay-per-use Spark-based processing engine.
+| Component | Service | Purpose |
+|-----------|---------|---------|
+| CDN + Edge Cache | CloudFront + WAF per cloud | Global edge cache, DDoS protection, SSL |
+| Static UI Hosting | S3 / GCS / Blob Storage | React SPA, cached at edge |
+| API Routing | ALB / Cloud LB / App Gateway | Throttling, health checks, route traffic to Fargate |
+| API Compute | Fargate / Cloud Run / Container Apps | FastAPI/Express serving /metrics and /validate |
+| ETL Compute | Fargate / Cloud Run Jobs / Container Apps Jobs | DuckDB CSV processing, BRPOP from Redis queue |
+| Fast KV + Queue + Pub/Sub | Redis per cloud | Three workloads, one service |
+| Relational DB | Aurora Serverless v2 / Cloud SQL / Azure Postgres | Validation records (standard SQL only) |
+| Raw Data Storage | S3 / GCS / Blob | Source of truth, audit trail (Parquet) |
+| S3 Upload Trigger | Lambda / Cloud Function / Azure Function | LPUSH file paths into Redis queue |
+| Durable DLQ + Alerts | SNS+SQS / Pub/Sub / Service Bus | Operator notifications that survive Redis restarts |
+| Observability | CloudWatch / Cloud Logging / Azure Monitor | Logging, metrics, tracing, alarms |
 
-### Pipeline Stages
+### What Changed from Earlier Versions
 
-```mermaid
-graph TD
-    CSV[CSV in S3 Upload Bucket<br/>~32M rows per election]
-
-    %% Stage 1
-    S1[Stage 1: INGEST<br/>Read CSV from S3<br/>Parse all rows<br/>Validate schema]
-    CSV --> S1
-
-    %% Stage 2
-    S2[Stage 2: DEDUPLICATE<br/>Check DynamoDB Control Table<br/>Skip or overwrite<br/>Idempotent — safe to re-run]
-    S1 --> S2
-    Ctrl[(DynamoDB<br/>Control Table)]
-    S2 -->|Check precinct status| Ctrl
-
-    %% Stage 3
-    S3[Stage 3: TRANSFORM + AGGREGATE<br/>Group by PRECINCT_CODE<br/>Group by CANDIDATE_CODE<br/>Group by CONTEST_CODE]
-    S2 --> S3
-
-    S3A[Compute Totals:<br/>• Votes per candidate per precinct<br/>• Votes per candidate per region<br/>• Votes per candidate national total<br/>• Turnout per precinct<br/>• Undervotes / overvotes per precinct]
-    S3 --> S3A
-
-    %% Stage 4
-    S4{Stage 4: PERSIST}
-    S3A --> S4
-
-    S3Parquet[(S3 Parquet<br/>Raw Data — Source of Truth)]
-    DDBMet[(DynamoDB<br/>Aggregated Metrics)]
-    CtrlUpd[(DynamoDB<br/>Control Table)]
-
-    S4 -->|Write raw data| S3Parquet
-    S4 -->|Write aggregated metrics| DDBMet
-    S4 -->|Update precinct status| CtrlUpd
-
-    %% Stage 5
-    S5[Stage 5: RECONCILIATION CHECK<br/>Compare sum raw S3 vs sum DynamoDB]
-    S3Parquet --> S5
-    DDBMet --> S5
-    SNSAlert((SNS Alert<br/>+ Auto re-run Glue))
-
-    S5 -->|Match| OK[Data Consistent ✓]
-    S5 -->|Mismatch| SNSAlert
-
-    %% Trigger
-    Trigger[Lambda Event Trigger<br/>S3 ObjectCreated event]
-    Trigger -->|StartJobRun| CSV
-
-    %% Styling
-    classDef stage fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
-    classDef compute fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    classDef storage fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    classDef decision fill:#fff9c4,stroke:#f9a825,stroke-width:2px
-    classDef alert fill:#ffebee,stroke:#c62828,stroke-width:2px
-    classDef ok fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-
-    class S1,S2,S3,S3A stage
-    class Trigger,CSV compute
-    class Ctrl,S3Parquet,DDBMet,CtrlUpd storage
-    class S4,S5 decision
-    class SNSAlert alert
-    class OK ok
-```
-
-### Why Glue Over Lambda for ETL?
-
-| Factor | AWS Glue | Lambda |
-|--------|---------|--------|
-| Max execution time | Unlimited (managed Spark) | 15 minutes |
-| Memory | Scales across cluster | 10GB max |
-| 32M row processing | Native (Spark distributed) | Would require chunking/fan-out |
-| Cost model | Per-DPU-second (pay for actual processing) | Per-request + duration |
-| Best for | Large batch ETL | Small event-driven tasks |
-
-Glue handles the 32M row batch natively. Lambda is kept for lightweight triggers (S3 event) and API routes (validation, metrics query).
-
-### Glue Job Configuration (Recommended)
-
-| Setting | Value | Rationale |
-|---------|-------|-----------|
-| Worker type | G.1X (1 DPU, 8GB) | Good balance of cost/performance |
-| Worker count | 5-10 | Parallel processing for 32M rows |
-| Glue version | 4.0 | Latest, supports Python/PySpark |
-| Job bookmark | Enabled | Tracks processed files, supports incremental loads |
-| Max retries | 3 | Auto-retry on transient failures |
-| Timeout | 60 minutes | Safety limit |
-| Notifications | SNS on FAIL/SUCCESS | Visibility into job status |
+| v1/v2 Service | v3 Replacement | Why |
+|---------------|---------------|-----|
+| DynamoDB (Metrics + Status) | **Redis KV** | Faster (sub-ms), same protocol everywhere |
+| Step Functions (ETL orchestration) | **Redis LPUSH/BRPOP** | No cloud orchestrator needed |
+| SNS (real-time messaging) | **Redis pub/sub** | In-cluster events don't need durable messaging |
+| Abstraction interfaces ×4 | **×2** | Redis and Postgres use standard protocols |
 
 ---
 
 ## Data Storage Strategy
 
-The system uses a **dual-store** approach: raw data in S3 for auditability, aggregated metrics in DynamoDB for fast public reads.
+The system uses a **three-tier storage** approach: Redis for fast metrics reads, Postgres for relational validation data, and S3 Parquet as the immutable source of truth.
 
-### S3 (Parquet) — Source of Truth
+### Redis — Vote Metrics + Job Queue + Pub/Sub
+
+Redis replaces three v2 services (DynamoDB × 2 + Step Functions) and absorbs SNS real-time messaging. A single `cache.t3.small` instance handles all workloads.
+
+**Vote Metrics (KV Store):**
+
+```
+PRECINCT:123          → JSON {"reported": 12450, "total_voters": 15000, ...}
+CONTEST:president     → ZSET {"CandidateA": 5200000, "CandidateB": 4800000}
+STATUS:precinct#123   → "processed"
+ELECTION:2028         → JSON {"total_precincts": 95000, "reported": 87200}
+```
+
+**ETL Job Queue:**
+
+```
+etl:queue             → LPUSH by Lambda Trigger
+etl:processing        → LPUSH by ETL worker on start
+etl:failed            → LPUSH after 3 retries
+```
+
+**Pub/Sub Channels:**
+
+```
+etl:done              → API container invalidates cache
+etl:error             → Monitoring/logging
+```
+
+**Throughput:** 100K+ GETs/sec on a single node. For 50M requests over 2 days (~290 req/s average, ~3,000 req/s peak), one instance is sufficient.
+
+### Aurora Serverless v2 / Postgres — Validation Records
+
+| Aspect | Detail |
+|--------|--------|
+| Purpose | Stores volunteer validation records (checksum, QR cross-check results) |
+| Schema | One table: `validation_records` (precinct, checksum, QR status, validated_by, timestamp) |
+| How accessed | Standard `psycopg2` SQL — no Aurora Data API |
+| Why Aurora | Auto-scales 0.5–16 ACU, auto-shutdown compatible |
+| Migration path | `pg_dump` → `pg_restore` into Cloud SQL or Azure Postgres |
+
+> [!IMPORTANT]
+> Only standard Postgres SQL is used. No Aurora Data API, no RDS extensions. This ensures the migration path to GCP Cloud SQL or Azure Database for PostgreSQL is a `pg_dump`/`pg_restore` + connection string change.
+
+### S3 Parquet — Source of Truth
 
 | Aspect | Detail |
 |--------|--------|
 | Purpose | Store raw, unmodified CSV data converted to Parquet |
 | Format | Parquet (columnar, compressed, queryable via Athena) |
 | Partitioning | `year/election_id/precinct_code/` |
-| Use cases | Audit trails, ad-hoc analysis, re-aggregation if needed |
+| Use cases | Audit trails, ad-hoc analysis, Redis rebuild after restart |
 | Retention | Permanent (election records must be preserved) |
-| Queryable via | AWS Athena (SQL on S3, serverless, pay-per-query) |
+| Queryable via | Athena (AWS) / BigQuery (GCP) / Synapse (Azure) |
 
-### DynamoDB — Aggregated Metrics
+### Why Redis is Not the Source of Truth
 
-| Table | Partition Key | Sort Key | Purpose |
-|-------|--------------|----------|---------|
-| `VoteMetrics` | `contest_code#candidate_code` | `granularity#region_code` | Aggregated vote totals (national, regional, precinct) |
-| `PrecinctStatus` | `precinct_code` | — | Tracks which precincts have been processed |
-| `ElectionMetadata` | `election_id` | — | Election-level status (total precincts, reported count) |
+Redis is in-memory. Every metric write to Redis is also persisted in S3 Parquet. If Redis restarts:
 
-**Why aggregated, not raw?**
-
-| | Raw (32M items) | Aggregated (~thousands) |
-|---|---|---|
-| DynamoDB write cost | Very high | Low |
-| Query latency | Slow (scan + sum) | Fast (single-item lookup) |
-| Storage | Large | Small |
-| Public UX | Must compute on-the-fly | Results ready instantly |
-
-### Aurora Serverless v2 — Validation Records
-
-| Aspect | Detail |
-|--------|--------|
-| Purpose | Stores volunteer validation records (checksum, QR cross-check results) |
-| Why Aurora | Relational schema, complex queries on validation history |
-| Why Serverless v2 | Scales to 0.5 ACU when idle, no full cold start (unlike v1) |
-| Min capacity | 0.5 ACU |
-| Max capacity | 16 ACU (auto-scales) |
+1. The reconciliation job detects the gap
+2. The Redis Rebuild script queries S3 Parquet (via Athena/BigQuery/Synapse)
+3. Redis is rebuilt with fresh metrics (~5 minutes for 32M rows)
+4. During rebuild, the UI shows "Results Loading"
 
 ---
 
-## Data Accuracy & Integrity
+## ETL Pipeline — Redis Job Queue
 
-For an election monitoring system, accuracy is non-negotiable. The following measures ensure data integrity end-to-end:
+The ETL pipeline uses Redis `LPUSH`/`BRPOP` as a worker queue instead of a cloud-specific orchestrator.
 
-### 1. Checksum Validation (Pre-ETL Gate)
+### How It Works
 
-```mermaid
-graph TD
-    Upload[Volunteer uploads CSV]
-    Lambda[Lambda Validation<br/>Verify file checksum<br/>Cross-check QR code data]
-    Decision{Data valid?}
-    Reject[REJECTED<br/>Data never enters ETL pipeline]
-    Aurora[(Aurora Serverless v2<br/>Validation record logged)]
-    Proceed[GOOD DATA<br/>Proceeds to S3 + Glue]
-
-    Upload --> Lambda
-    Lambda --> Decision
-    Decision -->|BAD DATA| Reject
-    Decision -->|GOOD DATA| Aurora
-    Aurora --> Proceed
-
-    classDef reject fill:#ffebee,stroke:#c62828,stroke-width:2px
-    classDef accept fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    classDef decision fill:#fff9c4,stroke:#f9a825,stroke-width:2px
-
-    class Reject reject
-    class Proceed accept
-    class Decision decision
+```
+Volunteer uploads CSV → S3 event → Lambda Trigger → LPUSH etl:queue file.csv
+                                                         │
+                                            ┌────────────┼────────────┐
+                                            ▼            ▼            ▼
+                                         ETL Task 1   ETL Task 2   ETL Task 3
+                                            │            │            │
+                                         BRPOP file   BRPOP file   BRPOP file
+                                            │            │            │
+                                         DuckDB       DuckDB       DuckDB
+                                            │            │            │
+                                         SET Redis    SET Redis    SET Redis
 ```
 
-### 2. Idempotent Glue Job
+- **Atomic dequeue:** `BRPOP` ensures no two workers process the same file
+- **Parallel fan-out:** Increase Fargate task count to add workers. Set to 10 for election day, 0 for idle
+- **No orchestration service:** Redis is the coordination point
 
-- Glue checks the `PrecinctStatus` DynamoDB table before processing
-- If a precinct was already processed, Glue **overwrites** (not adds) — preventing double-counting
-- Safe to re-run the same CSV upload without inflating totals
+### ETL Stages
 
-### 3. Atomic Batch Updates
+1. **Download** — Worker gets CSV from S3 via StorageClient interface
+2. **Parse + Aggregate** — DuckDB processes in-memory: group by precinct, candidate, contest
+3. **Persist** — Write Parquet to S3 (source of truth), write metrics to Redis (fast path)
+4. **Notify** — `PUBLISH etl:done` → API container invalidates in-memory cache
 
-- Glue writes to a **S3 staging area** first
-- Only after all aggregation is complete, a single batch update writes to DynamoDB
-- A `data_status` field tracks "partial" vs "complete" state
+### Failure Handling
 
-### 4. Reconciliation Job
+| Scenario | Mechanism |
+|----------|-----------|
+| Worker crashes mid-process | Watchdog scans `etl:processing` for stale entries (>10 min) → re-queues |
+| Permanent failure (3 retries) | Moved to `etl:failed` → durable alert via SNS |
+| Redis restarts | Lambda Trigger re-scans S3 → re-queues. Reconciliation detects gap → triggers rebuild |
+| Duplicate upload (idempotency) | `STATUS:{file_key}` check before processing → skip if already processed |
 
-- Periodic check: `sum(raw votes in S3 Parquet) == sum(aggregated totals in DynamoDB)`
-- Mismatch triggers an **SNS alert** and automatic Glue re-run
-- Uses Athena to query S3 Parquet in seconds
+### Performance
 
-### 5. Public Transparency
-
-- Frontend displays "X of Y precincts reported" using `ElectionMetadata` table
-- Results shown as "processing" until all expected precincts are in
-- Citizens see data status, not just numbers
-
-### 6. Audit Trail
-
-- Raw CSV data preserved in S3 (Parquet) permanently
-- Any disputed result can be re-verified via Athena queries on raw data
-- Glue job is re-runnable from S3 at any time — DynamoDB aggregates can be rebuilt from scratch
+| Scenario | Workers | Time |
+|----------|---------|------|
+| Single worker | 1 Fargate task | ~30-60 min |
+| 10 workers | 10 Fargate tasks | ~3-6 min |
+| 20 workers | 20 Fargate tasks | ~2-3 min |
 
 ---
 
 ## Request Flows
 
-The following UML sequence diagrams detail the end-to-end request flows for each use case. Diagrams use [Mermaid](https://mermaid.js.org/) syntax and render natively on GitHub, GitLab, and most markdown viewers.
-
-### Flow 1 — Load Website (Public)
-
-Citizens access the public election results website. CloudFront serves cached static assets from the S3 origin.
+### Flow 1 — Query Vote Metrics (Public)
 
 ```mermaid
 sequenceDiagram
-    participant Public as Public Client
-    participant CDN as CloudFront + WAF
-    participant S3 as S3 Static UI
+    participant Public as Public Browser
+    participant CF as CloudFront + WAF
+    participant ALB as ALB
+    participant API as Fargate API Container
+    participant Redis as Redis
 
-    Public->>CDN: GET / (request website)
-    CDN->>CDN: WAF checks request (rate limit, DDoS)
-    alt Cache hit at edge
-        CDN-->>Public: Return cached HTML/JS (fast)
-    else Cache miss
-        CDN->>S3: Fetch static assets (origin)
-        S3-->>CDN: Return HTML/JS files
-        CDN-->>Public: Return HTML/JS (cached at edge)
-    end
+    Public->>CF: GET /api/metrics?precinct=123
+    CF->>CF: WAF inspect + rate limit
+    CF->>ALB: Route to Fargate
+    ALB->>API: Forward request
+    API->>Redis: GET PRECINCT:123
+    Redis-->>API: Vote data (<1ms)
+    API-->>CF: JSON + data_status
+    CF-->>Public: Cached response (TTL 30s)
 ```
 
 ### Flow 2 — Validate Vote (Volunteer)
 
-Volunteers validate the integrity of uploaded CSV data using checksums and QR code cross-checks before the data enters the ETL pipeline.
+```mermaid
+sequenceDiagram
+    participant Volunteer as Volunteer
+    participant CF as CloudFront + WAF
+    participant ALB as ALB
+    participant API as Fargate API Container
+    participant Aurora as Aurora Postgres
+
+    Volunteer->>CF: POST /api/validate
+    CF->>ALB: Route to Fargate
+    ALB->>API: Forward request
+    API->>API: Checksum + QR validation
+    API->>Aurora: INSERT (standard SQL)
+    Aurora-->>API: Success
+    API-->>Volunteer: 200 — Validated
+```
+
+### Flow 3 — Upload CSV → ETL (Volunteer)
 
 ```mermaid
 sequenceDiagram
-    participant Vol as Volunteer Client
-    participant GW as API Gateway
-    participant Lambda as Lambda Validation
-    participant Aurora as Aurora Serverless v2
+    participant Volunteer as Volunteer
+    participant S3 as S3 Upload
+    participant Trigger as Lambda Trigger
+    participant Redis as Redis Queue
+    participant ETL as Fargate ETL Container
+    participant Storage as StorageClient
+    participant S3PQ as S3 Parquet
 
-    Vol->>GW: POST /validate (CSV metadata + checksum)
-    GW->>GW: Throttle + rate limit check
-    GW->>Lambda: Invoke validation
-    Lambda->>Lambda: Verify file checksum
-    Lambda->>Lambda: Cross-check QR code data
-    alt Invalid data
-        Lambda-->>GW: 400 — Validation failed (checksum mismatch)
-        GW-->>Vol: 400 — Rejected (data never enters pipeline)
-    else Valid data
-        Lambda->>Aurora: INSERT validation record
-        Aurora-->>Lambda: Confirm insert
-        Lambda-->>GW: 200 — Validation passed
-        GW-->>Vol: 200 — Proceed to upload
-    end
+    Volunteer->>S3: Upload CSV
+    S3->>Trigger: ObjectCreated event
+    Trigger->>Redis: LPUSH etl:queue file.csv
+
+    ETL->>Redis: BRPOP etl:queue (blocking)
+    Redis-->>ETL: file.csv
+    ETL->>Redis: LPUSH etl:processing file.csv
+    ETL->>Storage: Download CSV (via StorageClient)
+    ETL->>ETL: Parse + Aggregate (DuckDB)
+    ETL->>Storage: Write Parquet to S3
+    ETL->>Redis: SET PRECINCT:123 + ZADD CONTEST:president
+    ETL->>Redis: PUBLISH etl:done
+    ETL->>Redis: LREM etl:processing file.csv
 ```
 
-### Flow 3 — Query Vote Metrics (Public)
-
-Citizens query aggregated election results. Data is pre-computed and stored in DynamoDB for fast reads.
+### Flow 4 — Cache Invalidation (Automated)
 
 ```mermaid
 sequenceDiagram
-    participant Public as Public Client
-    participant GW as API Gateway
-    participant Lambda as Lambda Vote Metrics
-    participant DDB as DynamoDB (Metrics)
+    participant ETL as ETL Container
+    participant Redis as Redis Pub/Sub
+    participant API as API Container
 
-    Public->>GW: GET /results?contest=...&region=...
-    GW->>GW: Throttle + rate limit check
-    GW->>Lambda: Invoke metrics query
-    Lambda->>DDB: Query aggregated results (pre-computed)
-    DDB-->>Lambda: Return metrics (single-item lookup)
-    Lambda->>Lambda: Format response + data_status
-    Lambda-->>GW: 200 — Aggregated results + precincts reported count
-    GW-->>Public: 200 — Results (fast, cached)
+    ETL->>Redis: PUBLISH etl:done {"precinct": 123}
+    Redis-->>API: SUBSCRIBE → receive event
+    API->>API: Invalidate cache for precinct 123
 ```
 
-### Flow 4 — Upload Precinct CSV (Volunteer)
+---
 
-Volunteers upload large CSV files (up to 2GB). The upload triggers an event-driven ETL pipeline that parses, deduplicates, aggregates, and persists the data.
+## Data Accuracy & Integrity
 
-```mermaid
-sequenceDiagram
-    participant Vol as Volunteer Client
-    participant S3U as S3 Upload Bucket
-    participant Trig as Lambda Event Trigger
-    participant Glue as AWS Glue ETL Job
-    participant S3P as S3 (Parquet)
-    participant DDB as DynamoDB (Metrics)
-    participant Ctrl as DynamoDB (Control)
-    participant SNS as SNS
+For an election monitoring system, accuracy is non-negotiable.
 
-    Vol->>S3U: Upload CSV (presigned URL, up to 2GB)
-    S3U-->>Vol: 200 — Upload complete
-    S3U->>Trig: S3 Event Notification (ObjectCreated)
-    Trig->>Glue: StartJobRun (CSV path)
-    
-    Note over Glue: Stage 1 — INGEST
-    Glue->>S3U: Read CSV (~millions of rows)
-    S3U-->>Glue: Return CSV data
-    
-    Note over Glue: Stage 2 — DEDUPLICATE
-    Glue->>Ctrl: Check PrecinctStatus (already processed?)
-    Ctrl-->>Glue: Return status
-    
-    Note over Glue: Stage 3 — TRANSFORM + AGGREGATE
-    Glue->>Glue: Group by precinct / candidate / contest
-    Glue->>Glue: Compute totals (national, regional, precinct)
-    
-    Note over Glue: Stage 4 — PERSIST
-    Glue->>S3P: Write raw data (Parquet, partitioned)
-    S3P-->>Glue: Confirm write
-    Glue->>DDB: Batch write aggregated metrics
-    DDB-->>Glue: Confirm write
-    Glue->>Ctrl: Update PrecinctStatus (processed)
-    Ctrl-->>Glue: Confirm update
-    
-    alt Job succeeds
-        Glue->>SNS: Publish SUCCESS notification
-        SNS-->>Vol: Email/notification — Processing complete
-    else Job fails
-        Glue->>SNS: Publish FAILURE notification
-        SNS-->>Vol: Email/notification — Processing failed (will retry)
-    end
+### 1. Checksum Validation (Pre-ETL Gate)
+
+Volunteer upload validation happens via the API container (same as v1/v2). Invalid data is rejected before entering the ETL pipeline.
+
+### 2. Idempotent ETL Processing
+
+- ETL worker checks `STATUS:{file_key}` in Redis before processing
+- If already processed, skips — prevents double-counting
+- Safe to re-upload the same CSV without inflating totals
+
+### 3. Redis is Not Source of Truth
+
+- Every metric write to Redis is also persisted in S3 Parquet
+- Redis can be rebuilt from S3 Parquet at any time
+- The `REBUILD:status` key tracks rebuild state
+
+### 4. Reconciliation Job
+
+- Scheduled comparison: `SUM(votes in S3 Parquet via Athena) == SUM(votes in Redis via GET/ZRANGE)`
+- Mismatch triggers an SNS alert and automatic Redis rebuild
+
+### 5. Public Transparency
+
+- Frontend displays "X of Y precincts reported" using `ELECTION:*` key in Redis
+- `data_status` field in API responses shows whether results are partial or complete
+
+### 6. Audit Trail
+
+- Raw CSV data preserved in S3 Parquet permanently
+- Any disputed result can be re-verified via Athena queries on raw data
+- Redis aggregates can be rebuilt from S3 at any time
+
+---
+
+## Redis Rebuild (Auto-Shutdown)
+
+To achieve the lowest annual cost (~$883/year), Redis is shut down during idle months and rebuilt from S3 Parquet when needed.
+
+### When Rebuilds Happen
+
+| Trigger | When |
+|---------|------|
+| Redis startup | After auto-shutdown period ends |
+| Scheduled safety net | Weekly |
+| Reconciliation mismatch | Automatic, triggered by alert |
+
+### Performance
+
+| Data Volume | Athena Query | Redis Rebuild | Total | UI Impact |
+|-------------|-------------|---------------|-------|-----------|
+| Full election (32M rows) | ~30-60s | ~2-5 min | ~5 min | "Results Loading" |
+| Between elections (minimal) | ~5-10s | ~1 min | ~1 min | Brief loading |
+
+```python
+# Simplified rebuild logic
+def rebuild():
+    redis = Redis(host=REDIS_HOST)
+    rows = athena.query("SELECT precinct_code, candidate_code, SUM(votes) ...")
+
+    pipe = redis.pipeline()
+    for i, row in enumerate(rows):
+        pipe.set(f"PRECINCT:{row.precinct}", json.dumps(row))
+        if i % 1000 == 0:
+            pipe.execute()
+            pipe = redis.pipeline()
+    pipe.execute()
+    redis.set("REBUILD:status", "complete")
 ```
 
-### Flow 5 — Reconciliation (Automated)
+---
 
-A periodic automated job verifies data integrity by comparing raw source data against aggregated totals.
+## Cloud Portability
 
-```mermaid
-sequenceDiagram
-    participant CW as CloudWatch (Scheduled)
-    participant Athena as Amazon Athena
-    participant S3P as S3 (Parquet)
-    participant DDB as DynamoDB (Metrics)
-    participant SNS as SNS
+### Service Migration Map
 
-    CW->>Athena: Trigger reconciliation query
-    Athena->>S3P: SELECT SUM(votes) GROUP BY candidate
-    S3P-->>Athena: Return raw totals
-    Athena->>DDB: Query aggregated totals
-    DDB-->>Athena: Return aggregated totals
-    Athena->>Athena: Compare raw sum vs aggregated sum
-    alt Totals match
-        Athena-->>CW: OK — Data consistent
-    else Mismatch detected
-        Athena->>SNS: Publish MISMATCH alert
-        SNS->>SNS: Trigger Glue re-run (auto-remediation)
-        Note over SNS: Engineering team notified
-    end
-```
+| Layer | AWS (now) | GCP (later) | Azure (later) | Migration Effort |
+|-------|-----------|-------------|---------------|-----------------|
+| Compute (API) | **Fargate** | Cloud Run | Container Apps | **None** — same Docker image |
+| Compute (ETL) | **Fargate** | Cloud Run Jobs | Container Apps Jobs | **None** — same Docker image |
+| API Routing | ALB | Cloud Load Balancing | Application Gateway | **Low** — Terraform resource swap |
+| Fast KV, Queue, Pub/Sub | **ElastiCache Redis** | Memorystore Redis | Azure Cache for Redis | **None** — same `redis-py` client |
+| Relational DB | **Aurora Serverless v2** | Cloud SQL Postgres | Azure Database Postgres | **Low** — `pg_dump` → `pg_restore` |
+| Object Storage | S3 | GCS | Blob Storage | **Low** — StorageClient swap |
+| Durable Messaging | SNS + SQS | Pub/Sub | Service Bus | **Low** — MessageQueue swap |
+| Edge / CDN + WAF | CloudFront + WAF | Cloud CDN + Armor | Azure CDN + WAF | **Medium** — config rewrite |
+| DNS | Route 53 | Cloud DNS | Azure DNS | **Low** — zone export/import |
+| S3 Upload Trigger | Lambda | Cloud Function | Azure Function | **Low** — 10 lines per cloud |
+| Observability | CloudWatch + X-Ray | Cloud Logging + Trace | Azure Monitor | **Medium** — instrumentation swap |
+
+### Migration Steps
+
+1. **Write target cloud implementations** for StorageClient and MessageQueue (the only two interfaces)
+2. **Push Docker image** to target cloud registry
+3. **Provision infrastructure** via Terraform (separate per-cloud module)
+4. **Migrate data:** `pg_dump`/`pg_restore` for Postgres, `aws s3 sync`/`gsutil rsync`/`azcopy` for object storage
+5. **Flip config:** `CLOUD_PROVIDER=gcp` env var
+6. **Test:** Run reconciliation, validate API responses, check ETL pipeline
 
 ---
 
 ## Cost Comparison
 
 > [!NOTE]
-> This is a summary. For the full per-service breakdown, formulas, optimization recommendations, and annual projections, see **[COSTS.md](./docs/COSTS.md)**.
+> This is a summary. Full per-service breakdown and annual projections in **[docs/cost-re-arch-v3.md](./docs/cost-re-arch-v3.md)**. v1/v2 figures in **[docs/cost-re-arch-v2.md](./docs/cost-re-arch-v2.md)** and **[docs/cost-arch-v1.md](./docs/cost-arch-v1.md)**.
 
-### Architecture-Level Cost Comparison (High Level)
+### Per-Month Comparison (50M Peak Requests, ap-southeast-1)
 
-> [!NOTE]
-> Per-component figures below are illustrative roll-ups. The Comprehensive Monthly Estimate table further down shows audited totals from [COSTS.md](./docs/COSTS.md) (corrected 2026-07-03 against AWS ap-southeast-1 public pricing).
+| Category | v1 (Lambda + Glue) | v2 (Fargate + DDB) | v3 (Fargate + Redis) |
+|----------|---------------------|---------------------|----------------------|
+| Edge (CF Business + ALB) | $254 | $225 | $221 |
+| Compute (API + ETL) | $46 | $45 | $44 |
+| Database (KV + Relational) | $75 | $75 | **$36** |
+| Storage + Registry | $5 | $6 | $6 |
+| Messaging | $2 | $2 | $1 |
+| Observability | $35 | $35 | $35 |
+| Analytics | $2 | $2 | $2 |
+| **Peak Month (Optimized)** | **~$402** | **~$390** | **~$345** |
 
-| Component | Initial Proposal (EC2) | Est. Cost/mo | Serverless Proposal | Idle/mo | Peak/mo |
-|-----------|------------------------|-------------|---------------------|---------|---------|
-| Web Application | EC2 (m5.large) | $70 | Lambda + API Gateway | $0 | $83 |
-| NoSQL Database | Aerospike (i3.xlarge) | $227 | DynamoDB | $1 | $22 |
-| Relational DB | RDS (db.m5.large) | $130 | Aurora Serverless v2 | $39 | $11 |
-| File Processing | EC2 (c5.xlarge) | $124 | AWS Glue | $0 | $10 |
-| Caching | i3.large EC2 | $113 | DynamoDB (consolidated) | $0 | $0 |
-| Static UI + CDN | N/A | $0 | S3 + CloudFront + WAF | $5 | $402 |
-| DNS | N/A | $0 | Route 53 | $1 | $21 |
-| Secrets | N/A | $0 | Secrets Manager | $3 | $0 |
-| Raw Data Storage | EBS Volumes | $50 | S3 (Parquet) | $5 | $0 |
-| Observability | N/A | $0 | CloudWatch + X-Ray | $42 | $0 |
-| Messaging | N/A | $0 | SNS + SQS | $2 | $0 |
-| Analytics | N/A | $0 | Athena | $1 | $0 |
-| **Subtotal** | | **$714** | | **$98** | **$548** |
+### Annual Projection (1 Peak + 11 Idle)
 
-> [!IMPORTANT]
-> The initial EC2 estimate above reflects the always-on line-item baseline only and excludes peak data-transfer costs. The peak column for the Serverless proposal reflects pay-as-you-go (CloudFront data transfer at $0.140/GB in ap-southeast-1). See the [Comparison section in COSTS.md](./docs/COSTS.md#comparison-with-initial-ec2-proposal) for the apples-to-apples annual comparison including the CloudFront Business flat-rate plan.
+| Scenario | v1 | v2 | v3 |
+|----------|-----|-----|-----|
+| Always-On | ~$1,117 | ~$1,171 | ~$1,159 |
+| Auto-Shutdown (All DBs) | ~$1,117 | **~$951** | **~$883** |
 
-### Comprehensive Monthly Estimate (50M Peak Requests, ap-southeast-1)
-
-> [!NOTE]
-> Audited 2026-07-03 — prices verified against AWS ap-southeast-1 public pricing where possible. CloudFront + WAF rates verified directly from AWS pricing pages; other per-service rates are knowledge-based and flagged in [COSTS.md Notes & Disclaimers](./docs/COSTS.md#notes--disclaimers). Added previously-missed services: **Route 53 DNS, Secrets Manager, S3 request ops, WAF vended logs, DynamoDB optional features**.
-
-For an election month with **50M requests over a 2-day peak window** in the **ap-southeast-1 (Singapore)** region:
-
-| Cost Category | Monthly Cost (USD) |
-|---------------|---------------------|
-| Edge & Networking (CloudFront, WAF, Route 53, Secrets Manager, Data Transfer) | $467.04 |
-| Compute (API Gateway, Lambda ×3, AWS Glue) | $110.87 |
-| Database (Aurora Serverless v2, DynamoDB) | $74.84 |
-| Observability (CloudWatch, X-Ray) | $41.50 |
-| Storage (S3) | $5.29 |
-| Messaging (SNS, SQS) | $2.00 |
-| Ad-Hoc Analytics (Athena) | $1.60 |
-| **Monthly Total (Un-Optimized, pay-as-you-go)** | **~$703** |
-| **Monthly Total (Optimized — CF Business plan for peak month only)** | **~$402** |
-| **Monthly Total (Optimized idle — CF Free plan, WAF attached)** | **~$65** |
-
-### Annual Projection
-
-For an election-cycle year (1 peak month + 11 idle months):
-
-| Scenario | Annual Cost (USD) |
-|----------|-------------------|
-| Initial EC2 Proposal (always-on) | ~$8,750 |
-| Serverless (Un-Optimized, pay-as-you-go all year) | ~$1,517 |
-| Serverless (Optimized — CF plan-switch: Business for peak, Free for idle) | **~$1,117** |
-| Serverless (Optimized + WAF detached during idle months) | ~$1,062 |
-
-**Annual savings vs the initial EC2 proposal: ~83% (un-optimized) to ~87% (optimized with CloudFront plan-switching, WAF stays attached).**
-
-> [!IMPORTANT]
-> The optimized scenario assumes **CloudFront plan-switching**: subscribe to the Business plan ($200/mo, no overage charges, bundles CDN + WAF + DNS + logging) for the single election month, then drop to the Free plan ($0/mo) for the 11 idle months. This requires verification with AWS Support — month-to-month switching without penalty is assumed but not confirmed. See [COSTS.md → Plan-Switching Mechanics](./docs/COSTS.md#plan-switching-mechanics--verify-with-aws).
-
-> [!CAUTION]
-> Earlier versions of this table reported "~$816" for the optimized annual — that figure was an arithmetic error. The correct optimized annual is **~$1,117** (with WAF attached year-round) or ~$1,062 (with WAF detached during idle). Keeping WAF attached year-round is recommended for an election platform's security posture.
+**v3 is $883/year — the cheapest architecture yet.** $68 less than v2 and $234 less than v1.
 
 ### Key Insights
 
-- **Idle cost ~$65/month** (optimized, Free CF plan, WAF stays attached) — platform costs almost nothing between elections
-- **CloudFront data transfer is the dominant peak-period cost (~67%)** — the 2026 CloudFront Business flat-rate plan ($200/mo, no overage charges, bundles CDN + WAF + DNS + logging) is the single biggest cost lever and turns the unpredictable election-month burst into a predictable fixed fee
-- **Optimized peak month ~$402** with the CloudFront Business plan + Lambda caching + Parameter Store swap
-- **Optimized annual ~$1,117** with plan-switching (WAF attached year-round) — ~87% savings vs the initial EC2 proposal
-- Detailed formulas, plan-switching mechanics, verification status, and Mermaid cost-visualization charts are in **[COSTS.md](./docs/COSTS.md)**
-
----
-
-
-## Open Action Items
-
-Items from the architecture draft that require further investigation:
-
-| # | Item | Status |
-|---|------|--------|
-| 1 | Verify Aurora Serverless max storage capacity for validation records | TODO |
-| 2 | Benchmark AppSync vs API Gateway for processing time | TODO |
-| 3 | API Gateway 29-second timeout — identify any long-running operations | TODO |
-| 4 | Evaluate AI/ML models for anomaly detection in vote data | TODO |
-| 5 | Estimate AI model costs if anomaly detection is added | TODO |
-| 6 | Finalize AWS Glue job design (worker count, partitioning strategy) | TODO |
-| 7 | Configure rate limiting + WAF rules for public-facing endpoints | TODO |
-| 8 | Define DynamoDB schema for aggregated metrics (partition/sort keys) | TODO |
-| 9 | Build reconciliation job + SNS alerting | TODO |
-| 10 | Set up CloudWatch dashboards for election-day monitoring | TODO |
+- **Redis consolidates 3 services into 1** — replaces DynamoDB (KV), Step Functions (orchestration), and SNS (real-time). $25/month for all three workloads.
+- **Peak month is cheapest in v3** ($345) — Redis is cheaper than DynamoDB + Step Functions combined
+- **Idle cost depends on auto-shutdown** — Redis always-on adds $25/month. With auto-shutdown + rebuild script, idle drops to ~$48/month
+- **Fewer services to migrate** — 5 vs 8+ in v2. Less IaC, fewer interfaces, simpler migration
+- **Per-cloud cost variance** — AWS is cheapest for managed services in Southeast Asia. GCP and Azure Redis may be 20-50% more expensive
 
 ---
 
@@ -631,43 +525,144 @@ Items from the architecture draft that require further investigation:
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Static HTML/JS (React or similar) hosted on S3 + CloudFront |
-| API | Amazon API Gateway (REST) |
-| Validation Compute | AWS Lambda (Node.js or Python) |
-| Metrics Compute | AWS Lambda (Node.js or Python) |
-| ETL | AWS Glue (PySpark) |
-| Relational DB | Amazon Aurora Serverless v2 (PostgreSQL) |
-| NoSQL DB | Amazon DynamoDB |
-| Object Storage | Amazon S3 (Parquet for raw, HTML for UI) |
-| CDN / Security | CloudFront + AWS WAF |
-| Notifications | Amazon SNS |
-| Queue / DLQ | Amazon SQS |
-| Observability | CloudWatch + X-Ray |
-| Ad-hoc Queries | Amazon Athena (SQL on S3 Parquet) |
-| IaC | Terraform or CloudFormation/SAM (see [comparison](./docs/CLOUDFORMATION.md)) |
+| Frontend | React SPA (static build, hosted on object storage + CDN) |
+| API Framework | FastAPI (Python) or Express (Node.js) — TBD |
+| API Compute | AWS Fargate / GCP Cloud Run / Azure Container Apps |
+| ETL Processing | DuckDB (Python, in-process columnar analytics) |
+| ETL Compute | AWS Fargate / GCP Cloud Run Jobs / Azure Container Apps Jobs |
+| Fast KV / Queue / Pub/Sub | Redis (ElastiCache / Memorystore / Azure Cache) |
+| Relational DB | Aurora Serverless v2 / Cloud SQL / Azure Postgres (standard SQL only) |
+| Object Storage | S3 / GCS / Blob Storage |
+| CDN + Security | CloudFront + WAF / Cloud CDN + Armor / Azure CDN + WAF |
+| DNS | Route 53 / Cloud DNS / Azure DNS |
+| Durable Messaging | SNS + SQS / Pub/Sub / Service Bus |
+| Observability | CloudWatch + X-Ray / Cloud Logging + Trace / Azure Monitor |
+| Analytics | Athena / BigQuery / Synapse |
+| IaC | Terraform (independent modules per cloud) |
+| CI/CD | GitHub Actions (build → test → deploy containers + sync UI to CDN) |
+
+### Abstraction Interfaces
+
+| Interface | Methods | Purpose |
+|-----------|---------|---------|
+| `StorageClient` | `upload()`, `download()`, `list()`, `delete()` | Object storage — S3, GCS, or Blob |
+| `MessageQueue` | `publish_alert()`, `push_dead_letter()` | Durable messaging — SNS+SQS, Pub/Sub, or Service Bus |
+
+**Redis and Postgres use standard protocols** (`redis-py`, `psycopg2`) — no interfaces needed. Only the connection string changes between clouds.
 
 ---
 
-## Terraform Infrastructure
+## Project Structure
 
-Infrastructure will be provisioned via **Infrastructure-as-Code**. The current design docs explore two options — **[Terraform](./docs/TERRAFORM.md)** (HCL, modular, multi-provider) and **[CloudFormation/SAM](./docs/CLOUDFORMATION.md)** (managed state, unified code+infra pipeline). See the comparison below and the linked docs for the full trade-off analysis.
+```
+src/
+├── config.py                     # CLOUD_PROVIDER switch + service factory
+├── interfaces/
+│   ├── storage_client.py         # upload / download / list / delete
+│   └── message_queue.py          # publish_alert / push_dead_letter
+├── aws/
+│   ├── s3_storage_client.py
+│   ├── sns_message_queue.py
+│   └── athena_client.py
+├── gcp/                          # (future)
+│   ├── gcs_storage_client.py
+│   ├── pubsub_message_queue.py
+│   └── bigquery_client.py
+├── azure/                        # (future)
+│   ├── blob_storage_client.py
+│   ├── servicebus_message_queue.py
+│   └── synapse_client.py
+├── api/
+│   ├── main.py                   # FastAPI entry point
+│   ├── routes/metrics.py         # GET /api/metrics
+│   ├── routes/validation.py      # POST /api/validate
+│   └── middleware/rate_limit.py  # Redis-backed rate limiter
+├── etl/
+│   ├── worker.py                 # BRPOP loop
+│   ├── processor.py              # DuckDB parse + aggregate
+│   └── watchdog.py               # Stale job recovery
+├── rebuild/
+│   └── rebuild_metrics.py        # Athena → Redis
+├── trigger/
+│   ├── handler.py                # Common logic
+│   ├── aws_handler.py            # Lambda entry
+│   ├── gcp_handler.py            # Cloud Function entry (future)
+│   └── azure_handler.py          # Azure Function entry (future)
+└── shared/
+    ├── redis_keys.py             # Key naming conventions
+    ├── models.py                 # Data classes
+    └── logger.py                 # Structured logging
+
+ui/                               # React front-end (static SPA)
+├── src/
+├── public/
+└── package.json
+
+infra/                            # Terraform per cloud
+├── aws/                          # main.tf, ecs.tf, alb.tf, redis.tf, rds.tf, s3.tf, cloudfront.tf, ...
+├── gcp/                          # Same structure, GCP resources (future)
+└── azure/                        # Same structure, Azure resources (future)
+
+docker/
+├── Dockerfile.api
+├── Dockerfile.etl
+└── docker-compose.yml            # Local dev: API + ETL + Redis + Postgres
+```
+
+### Key Rules
+
+| Rule | Enforcement |
+|------|-------------|
+| No cloud SDKs in `api/` or `etl/` | Code review — grep for `boto3`, `google-cloud`, `azure` |
+| Redis uses `redis-py` only | Standard Redis protocol, no cloud-specific extensions |
+| Postgres uses `psycopg2` only | Standard SQL, no Aurora Data API |
+| Cloud SDKs isolated in `aws/`, `gcp/`, `azure/` | Interfaces in `interfaces/` define the contract |
+| Terraform per cloud, no shared modules | `infra/aws/`, `infra/gcp/`, `infra/azure/` are independent |
+
+---
+
+## Infrastructure
+
+Infrastructure is provisioned via **Terraform** with independent modules per cloud. See [docs/TERRAFORM.md](./docs/TERRAFORM.md) for the Terraform design and [docs/CLOUDFORMATION.md](./docs/CLOUDFORMATION.md) for a CloudFormation comparison.
 
 | Aspect | Approach |
 |--------|----------|
-| **Modules** | `network/`, `compute/`, `storage/`, `etl/`, `messaging/`, `observability/`, `iam/` |
-| **State** | Remote S3 backend + DynamoDB locking |
-| **Auth** | GitHub OIDC (short-lived JWT → `AssumeRoleWithWebIdentity`) |
-| **CI/CD** | Plan on PR (posted as comment), auto-apply on merge to `main` |
+| **Modules per cloud** | `infra/aws/`, `infra/gcp/`, `infra/azure/` — independent, no shared modules |
+| **State** | Remote S3/GCS/Azure Blob backend + locking |
+| **Auth** | GitHub OIDC (short-lived JWT → AssumeRole) |
+| **CI/CD** | Plan on PR → auto-apply on merge to `main` |
 | **Environments** | `dev` → `staging` → `prod`, each fully isolated |
-| **Dev cost** | ~$29/mo (scaled-down AWS stack with auto-shutdown) + ~$0.11/mo (Terraform state); see **[COSTS-DEV.md](./docs/COSTS-DEV.md)** |
+| **Dev cost** | ~$51/mo (Fargate, Redis `cache.t3.micro`, Aurora auto-shutdown, ALB) |
 
-**Full details:** [docs/TERRAFORM.md](./docs/TERRAFORM.md) — includes 5 UML diagrams (module architecture, OIDC auth flow, CI/CD activity, multi-environment deployment, full lifecycle sequence).
+---
 
-> [!NOTE]
-> Interested in CloudFormation/SAM instead? See [docs/CLOUDFORMATION.md](./docs/CLOUDFORMATION.md) for a side-by-side comparison, sample template, migration path, and recommendation.
+## Open Items
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | Benchmark Redis `GET` throughput on `cache.t3.small` for 50M requests | Open |
+| 2 | Benchmark DuckDB ETL performance on 2GB CSV with 4 vCPU | Open |
+| 3 | Implement Redis Rebuild Script + test with real S3 Parquet data | Open |
+| 4 | Determine Redis auto-shutdown schedule + startup trigger mechanism | Open |
+| 5 | Test Redis failure recovery: restart → rebuild → API picks up stale cache | Open |
+| 6 | Choose API framework (FastAPI vs Express) | Open |
+| 7 | Define Fargate container sizing (vCPU / memory) for API and ETL | Open |
+| 8 | Design WAF rules per cloud (AWS WAF, GCP Armor, Azure WAF) | Open |
+| 9 | Verify CloudFront Business plan month-to-month switching with AWS Support | Open |
+| 10 | Benchmark Redis pub/sub latency for cache invalidation path | Open |
+| 11 | Implement ETL watchdog for stale job recovery | Open |
+| 12 | Evaluate Redis `cache.t3.micro` (0.5 GB) for dev vs `cache.t3.small` (1.37 GB) for prod | Open |
 
 ---
 
 ## Change Log
 
-All changes to this repository's documentation are tracked in **[CHANGES.md](./docs/CHANGES.md)**. See that file for a full version history of edits to README.md, COSTS.md, and other project documents.
+All changes to this repository's documentation are tracked in **[docs/CHANGES.md](./docs/CHANGES.md)**.
+
+### Architecture Versions
+
+| Version | Document | Description |
+|---------|---------|-------------|
+| v1 | [docs/readme-arch-v1.md](./docs/readme-arch-v1.md) | Serverless (Lambda, API Gateway, Glue, DynamoDB) |
+| v2 | [docs/readme-re-arch-v2.md](./docs/readme-re-arch-v2.md) | Fargate containers + DynamoDB + Aurora + Step Functions |
+| **v3** | **This document** | **Fargate containers + Redis + Aurora SQL. 5 services per cloud.** |

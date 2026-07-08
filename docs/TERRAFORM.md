@@ -749,7 +749,7 @@ After the first deploy, all subsequent changes go through the **PR → plan → 
 
 ## Architecture Diagram (Full System)
 
-For the complete system architecture including all AWS services and request flows, see [README.md](../README.md).
+For the complete system architecture including all AWS services and request flows, see [readme-arch-v1.md](readme-arch-v1.md).
 
 This document covers the **infrastructure provisioning layer only** — the Terraform modules that define, deploy, and manage every resource in the PPCRV architecture.
 
@@ -765,5 +765,5 @@ This document covers the **infrastructure provisioning layer only** — the Terr
 | GitHub OIDC with AWS | https://docs.github.com/en/actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services |
 | Terraform S3 Backend | https://developer.hashicorp.com/terraform/language/settings/backends/s3 |
 | Full cost analysis | [COSTS.md](./COSTS.md) |
-| Architecture overview | [README.md](../README.md) |
+| Architecture overview | [readme-arch-v1.md](readme-arch-v1.md) |
 | Change history | [CHANGES.md](./CHANGES.md) |

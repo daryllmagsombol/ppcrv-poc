@@ -1,6 +1,6 @@
 # PPCRV Re-Architecture — Cost Estimate (Delta)
 
-A cost estimate for the **cloud-portable Fargate architecture** described in [readme-re-arch.md](readme-re-arch.md). This is a **delta document** — it only covers what changes from the original cost model in [docs/COSTS.md](docs/COSTS.md).
+A cost estimate for the **cloud-portable Fargate architecture** described in [readme-re-arch-v2.md](readme-re-arch-v2.md). This is a **delta document** — it only covers what changes from the original cost model in [cost-arch-v1.md](cost-arch-v1.md).
 
 > [!IMPORTANT]
 > All prices are in **USD** based on AWS public pricing for **ap-southeast-1** as of **July 2026**. Actual billing will vary. This is a planning estimate, not a quote.
@@ -31,7 +31,7 @@ A cost estimate for the **cloud-portable Fargate architecture** described in [re
 | Compute (ETL) | AWS Glue (Spark) | **Fargate ETL container + Step Functions** |
 | Everything else | CloudFront, WAF, Route 53, Aurora, DynamoDB, S3, SNS, SQS, CloudWatch, X-Ray, Athena | **Unchanged** |
 
-The only cost line items that change are **compute** and **API routing**. All other services (edge, database, storage, messaging, observability, analytics) carry over identically from [docs/COSTS.md](docs/COSTS.md).
+The only cost line items that change are **compute** and **API routing**. All other services (edge, database, storage, messaging, observability, analytics) carry over identically from [cost-arch-v1.md](cost-arch-v1.md).
 
 ---
 
@@ -219,7 +219,7 @@ For an election-cycle year (1 peak + 11 idle):
 
 ## Dev Environment Impact
 
-The dev cost estimate in [docs/COSTS-DEV.md](docs/COSTS-DEV.md) applies to the v2 architecture with these deltas:
+The dev cost estimate in [COSTS-DEV.md](COSTS-DEV.md) applies to the v2 architecture with these deltas:
 
 ### Dev Cost Delta
 
@@ -293,14 +293,14 @@ The ALB is the **only significant cost difference** between v1 and v2 during idl
 
 ## Notes & Disclaimers
 
-1. **Delta document** — only changed services are costed. For unchanged services (CloudFront, Aurora, DynamoDB, S3, CloudWatch, etc.), see [docs/COSTS.md](docs/COSTS.md).
+1. **Delta document** — only changed services are costed. For unchanged services (CloudFront, Aurora, DynamoDB, S3, CloudWatch, etc.), see [cost-arch-v1.md](cost-arch-v1.md).
 2. **Fargate pricing** — based on ap-southeast-1 on-demand rates. Fargate Spot (if available for your task type) could reduce ETL costs by ~50%.
 3. **ALB LCU calculation** — the peak LCU estimate assumes ~5 LCU during the 2-day burst. Actual LCU depends on processed bytes, new connections, and rule evaluations. Verify with AWS Pricing Calculator.
 4. **Step Functions pricing** — Standard Workflows at $0.025 per 1,000 state transitions. Assumes ~3 transitions per ETL task (start → run → success). Express Workflows ($1.00/M transitions) would be cheaper for very high volume.
 5. **ECR cost** — assumes 2–3 container images (API + ETL + possibly a shared base) totaling ~10 GB at $0.10/GB-month.
 6. **No Reserved Capacity assumed** — Fargate on-demand rates used throughout. Compute Savings Plans could reduce Fargate costs by ~30-50% for committed usage.
 7. **Idle Fargate scaling** — requires auto-scaling minimum = 0. The ALB health check will fail until the first task starts (10-30s), which CloudFront will handle as a 502 until the container is healthy. For production, consider keeping min=1 during election day.
-8. **Aurora auto-shutdown assumption** — uses EventBridge Scheduler as described in [docs/COSTS-DEV.md](docs/COSTS-DEV.md). Same approach applies to the v2 architecture.
+8. **Aurora auto-shutdown assumption** — uses EventBridge Scheduler as described in [COSTS-DEV.md](COSTS-DEV.md). Same approach applies to the v2 architecture.
 
 ---
 
@@ -312,4 +312,4 @@ The ALB is the **only significant cost difference** between v1 and v2 during idl
 | ALB | https://aws.amazon.com/elasticloadbalancing/pricing/ |
 | Step Functions | https://aws.amazon.com/step-functions/pricing/ |
 | ECR | https://aws.amazon.com/ecr/pricing/ |
-| All unchanged services | See [docs/COSTS.md#references](docs/COSTS.md#references) |
+| All unchanged services | See [cost-arch-v1.md#references](cost-arch-v1.md#references) |

@@ -27,6 +27,57 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-08 — Created v3 cloud-agnostic architecture (Redis-based)
+
+**Files changed:** `readme-re-arch-v3.md` (new), `cost-re-arch-v3.md` (new)
+**Author:** Daryll (Claude)
+**Summary:** Designed a third iteration of the cloud-agnostic architecture that reduces service count from 8+ to 5 by consolidating DynamoDB, Step Functions, and SNS real-time messaging into a single Redis instance. The goal: fewer services to reimplement per cloud, faster performance, and lower cost.
+
+### Decisions made through Q&A
+
+- **Portability scope:** Keep option open for GCP/Azure, not multi-cloud deployment. v3 targets ~5 services per cloud instead of v2's 8+.
+- **Fast KV database:** Redis (ElastiCache / Memorystore / Azure Cache) replaces DynamoDB. Same `redis-py` client everywhere, sub-millisecond reads. Also serves as job queue and pub/sub.
+- **ETL orchestration:** Redis LPUSH/BRPOP replaces Step Functions. ETL container polls Redis for jobs — no cloud orchestrator needed.
+- **Relational DB:** Aurora Serverless v2 with standard Postgres SQL only (`psycopg2`). No Aurora-specific features. Migration is `pg_dump` → `pg_restore`.
+- **Messaging:** Redis pub/sub for real-time events (cache invalidation, cluster notifications). SNS/SQS retained only for durable DLQ and operator alerts.
+- **UI hosting:** Static SPA in object storage + CDN per cloud (same pattern as v2). Rejected monolith-in-container approach due to cost/performance at 50M requests.
+- **Abstraction interfaces:** Reduced from 4 (v2) to 2 (v3). Only StorageClient and MessageQueue need per-cloud implementations. Redis and Postgres use standard protocols — no abstraction needed.
+- **S3 upload trigger:** Lambda/Cloud Function/Azure Function per cloud. 10 lines each — not worth abstracting.
+- **Edge layer:** Per-cloud CDN + WAF + DNS (same as v2 pattern).
+
+### Architecture delta
+
+- **Removed:** DynamoDB (Metrics + Status tables), Step Functions, SNS real-time path
+- **Added:** Redis (cache + queue + pub/sub in one instance), Redis Rebuild Script (for auto-shutdown)
+- **Changed:** Aurora used with standard SQL only, SNS/SQS reduced to durable alerts only, interfaces cut from 4 to 2
+- Single Redis instance (`cache.t3.small`) handles three workloads: vote metrics KV store, ETL job queue (LPUSH/BRPOP), and real-time pub/sub
+- Redis Rebuild Script uses Athena/BigQuery/Synapse to rebuild Redis from S3 Parquet after idle-period shutdown
+
+### Key Redis data model
+- **Vote metrics:** `PRECINCT:{id}` → JSON, `CONTEST:{name}` → ZSET (leaderboard), `STATUS:{key}` → status string
+- **Job queue:** `etl:queue` (pending), `etl:processing` (active), `etl:failed` (dead)
+- **Pub/sub:** `etl:done`, `etl:error` channels for in-cluster events
+
+### Cost impact
+| Metric | v1 (Lambda) | v2 (Fargate + DDB) | v3 (Fargate + Redis) |
+|--------|------------|--------------------|----------------------|
+| Peak month (optimized) | ~$402 | ~$390 | **~$345** |
+| Idle month (optimized, auto-shutdown) | ~$65 | ~$51 | **~$48** |
+| Annual (full auto-shutdown) | ~$1,117 | ~$951 | **~$883** |
+| Annual (always-on) | ~$1,117 | ~$1,171 | ~$1,159 |
+| Services per cloud | 10+ | ~8 | **~5** |
+| Abstraction interfaces | 4 | 4 | **2** |
+
+**Finding:** v3 is the cheapest annually ($883) with full auto-shutdown, but requires a Redis Rebuild Script (~100 lines). Without auto-shutdown, v3 is ~$208 more expensive than v2 due to Redis always-on idle cost. The rebuild script is the price of the savings.
+
+### Why
+- User request: fewer services to reimplement when switching clouds. v2 had 8+ cloud-specific services.
+- Redis emerged as the consolidation point: it replaces three v2 services (DynamoDB Metrics, DynamoDB Status, Step Functions) and absorbs SNS real-time messaging.
+- Redis and Postgres use standard protocols — no abstraction interfaces needed. Only StorageClient and MessageQueue remain.
+- The trade-off: v3 is $68/year cheaper than v2 at full auto-shutdown, but requires additional code (rebuild script + ETL watchdog).
+
+---
+
 ## 2026-07-08 — Reviewed and improved Re-Architecture docs
 
 **Files changed:** `readme-re-arch.md`, `cost-re-arch.md`

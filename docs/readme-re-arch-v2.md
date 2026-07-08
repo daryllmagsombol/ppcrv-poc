@@ -1,11 +1,11 @@
 # PPCRV Re-Architecture — Cloud-Portable Architecture (Delta)
 
-This document describes the **changes** from the original serverless architecture (see [README.md](README.md)) to a cloud-portable design using **AWS Fargate containers**. The goal: build on AWS now, but choose services that have equivalents on GCP and Azure so switching later is feasible with minimal changes.
+This document describes the **changes** from the original serverless architecture (see [readme-arch-v1.md](readme-arch-v1.md)) to a cloud-portable design using **AWS Fargate containers**. The goal: build on AWS now, but choose services that have equivalents on GCP and Azure so switching later is feasible with minimal changes.
 
 > [!NOTE]
-> This is a **delta document** — it only describes what changes from the original architecture. Reader cross-references [README.md](README.md) and [docs/COSTS.md](docs/COSTS.md) for unchanged services and full context.
+> This is a **delta document** — it only describes what changes from the original architecture. Reader cross-references [readme-arch-v1.md](readme-arch-v1.md) and [cost-arch-v1.md](cost-arch-v1.md) for unchanged services and full context.
 >
-> Cost impact for this architecture is documented in [cost-re-arch.md](cost-re-arch.md).
+> Cost impact for this architecture is documented in [cost-re-arch-v2.md](cost-re-arch-v2.md).
 
 ---
 
@@ -144,7 +144,7 @@ graph TB
 | Route 53 | DNS — swap to Cloud DNS / Azure DNS later |
 | CloudWatch + X-Ray | Observability — swap to Cloud Logging / Azure Monitor later |
 | Athena | Ad-hoc analytics — swap to BigQuery / Azure Synapse later |
-| **Reconciliation flow** | CloudWatch Scheduled → Athena → S3 Parquet vs DynamoDB → SNS. Unchanged — Athena queries S3 Parquet directly, independent of ETL runtime. See [Flow 5 in README.md](README.md#flow-5--reconciliation-automated). |
+| **Reconciliation flow** | CloudWatch Scheduled → Athena → S3 Parquet vs DynamoDB → SNS. Unchanged — Athena queries S3 Parquet directly, independent of ETL runtime. See [Flow 5 in readme-arch-v1.md](readme-arch-v1.md#flow-5--reconciliation-automated). |
 
 ---
 
@@ -630,13 +630,13 @@ kubectl rollout restart deployment/ppcrv-api  # if using EKS
 
 | # | Item | Status |
 |---|------|--------|
-| 1 | Decide: keep ALB always-on during idle or destroy/recreate | **Decided** — keep ALB always-on (see [cost-re-arch.md](cost-re-arch.md#alb-decision-always-on-vs-destroy)) |
+| 1 | Decide: keep ALB always-on during idle or destroy/recreate | **Decided** — keep ALB always-on (see [cost-re-arch-v2.md](cost-re-arch-v2.md#alb-decision-always-on-vs-destroy)) |
 | 2 | Choose Docker base image (python:3.12-slim vs node:20-slim) | Open — depends on language choice |
 | 3 | Choose web framework for API container (FastAPI / Express / Go) | Open |
 | 4 | Choose ETL processing library (pandas vs DuckDB vs both) | **Decided** — use DuckDB (see [ETL Memory Sizing](#etl-memory-sizing)) |
 | 5 | Implement Step Functions state machine for ETL fan-out | Open |
 | 6 | Define container resource sizing (vCPU / memory per task) | **Decided** — API: 1 vCPU / 2 GB, ETL: 1 vCPU / 8 GB (see [Auto-Scaling Configuration](#auto-scaling-configuration)) |
-| 7 | Decide: Aurora auto-shutdown schedule in dev (see cost-re-arch.md) | Open |
+| 7 | Decide: Aurora auto-shutdown schedule in dev (see cost-re-arch-v2.md) | Open |
 
 ---
 
