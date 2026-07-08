@@ -44,9 +44,11 @@ These services are **removed** from the v2 architecture. Their costs disappear f
 | API Gateway (HTTP API) | $54.12 | $0.12 | Replaced by ALB |
 | Lambda Vote Metrics | $28.95 | < $0.05 | Replaced by Fargate API container |
 | Lambda Validation | $16.68 | < $0.05 | Replaced by Fargate API container |
-| Lambda S3 Trigger | $1.00 | 0 | Replaced by Step Functions trigger |
 | AWS Glue | $10.12 | $0.10 | Replaced by Fargate ETL container |
-| **Total savings** | **$110.87** | **~$0.32** | |
+| **Total savings** | **$109.87** | **~$0.32** | |
+
+> [!NOTE]
+> The **Lambda S3 Trigger** is **not removed** — it still exists in v2 and triggers Step Functions (instead of Glue directly). Its cost ($1.00 peak, $0 idle) is unchanged and carried over from v1.
 
 ---
 
@@ -86,8 +88,8 @@ These services are **new** in v2:
 | Total Fargate-hours | 500 × 0.033 = 16.6h | 0 |
 | Compute rate (ap-southeast-1) | $0.04048/vCPU-h + $0.004445/GB-h | |
 | Compute cost | 16.6 × $0.04048 + 16.6 × 4 × $0.004445 ≈ **$0.97** | $0 |
-| Step Functions | 500 × $0.025/1K = $0.013 | $0 |
-| Round-up (buffer) | ~$1 | $0 |
+| Step Functions | 500 executions × 3 transitions × $0.025/1K = $0.013 | $0 |
+| Round-up (buffer for Lambda trigger + Step Functions) | ~$1 | $0 |
 | **Total ETL** | **~$2** | **$0** |
 
 ### Detailed ALB Calculation
@@ -111,9 +113,9 @@ These services are **new** in v2:
 
 | | v1 (Lambda + Glue) | v2 (Fargate Re-Architecture) | Delta |
 |-|---------------------|---------------------|-------|
-| Compute + API layer | $110.87 | ~$71 | **-$39.87** |
+| Compute + API layer | $110.87 | ~$72 (includes unchanged Lambda S3 Trigger) | **-$38.87** |
 | All other services | $592.27 | $592.27 | 0 |
-| **Total peak month** | **~$703** | **~$664** | **-$39** (~5% savings) |
+| **Total peak month** | **~$703** | **~$665** | **-$38** (~5% savings) |
 
 ### Idle Month (Un-Optimized — PAYG CloudFront, Aurora always-on)
 
@@ -136,13 +138,13 @@ These services are **new** in v2:
 | **Edge & Networking** | CloudFront + WAF + Route 53 | $458.90 |
 | **API Layer** | ALB | $25.00 |
 | **Compute (API)** | Fargate API container | $43.00 |
-| **Compute (ETL)** | Fargate ETL + Step Functions | $2.06 |
+| **Compute (ETL)** | Fargate ETL + Step Functions + Lambda S3 Trigger | $3.06 |
 | **Database** | Aurora Serverless v2 + DynamoDB | $74.84 |
 | **Storage** | S3 + ECR | $6.29 |
 | **Messaging** | SNS + SQS | $2.00 |
 | **Observability** | CloudWatch + X-Ray | $41.50 |
 | **Analytics** | Athena | $1.60 |
-| **TOTAL (Un-Optimized)** | | **~$664** |
+| **TOTAL (Un-Optimized)** | | **~$666** |
 
 ### v2 Peak Month (Optimized — CloudFront Business Plan)
 
@@ -150,14 +152,14 @@ These services are **new** in v2:
 |----------|---------------------|
 | Edge (Business plan absorbs CF + WAF + R53 + logs) | $200 |
 | API Layer (ALB) | $25 |
-| Compute (Fargate API) | $43 |
+| Compute (Fargate API + Lambda S3 Trigger) | $44 |
 | Compute (Fargate ETL + Step Functions) | $2 |
 | Database | $75 |
 | Storage + ECR | $6 |
 | Messaging | $2 |
 | Observability | $35 |
 | Analytics | $2 |
-| **TOTAL (Optimized Peak)** | **~$390** |
+| **TOTAL (Optimized Peak)** | **~$391** |
 
 ---
 
@@ -171,6 +173,7 @@ These services are **new** in v2:
 | ALB | $18.40 | Always-on base cost — the main portability overhead |
 | Fargate API | $0 | Scales to 0 tasks |
 | Fargate ETL | $0 | No uploads during idle |
+| Lambda S3 Trigger | $0 | No uploads during idle |
 | Route 53 | $0.50 | Hosted zone |
 | API Gateway | $0 | Removed |
 | AWS Glue | $0 | Removed |
@@ -201,14 +204,14 @@ For an election-cycle year (1 peak + 11 idle):
 | Optimized (Business plan, WAF attached, Aurora always-on) | ~$1,117 | ~$1,171 | +$54 (v2 more expensive) |
 
 **Math:**
-- Un-Optimized: v1 = $703 + 11 × $74 = $1,517. v2 = $664 + 11 × $92 = $1,676.
-- Optimized (auto-shutdown): v1 = $402 + 11 × $65 = $1,117. v2 = $390 + 11 × $51 = $951.
-- Optimized (Aurora always-on): v1 = $402 + 11 × $65 = $1,117. v2 = $390 + 11 × $71 = $1,171.
+- Un-Optimized: v1 = $703 + 11 × $74 = $1,517. v2 = $665 + 11 × $92 = $1,677.
+- Optimized (auto-shutdown): v1 = $402 + 11 × $65 = $1,117. v2 = $391 + 11 × $51 = $952.
+- Optimized (Aurora always-on): v1 = $402 + 11 × $65 = $1,117. v2 = $391 + 11 × $71 = $1,172.
 
 > [!NOTE]
-> **Counterintuitive finding:** With Aurora auto-shutdown in idle months, v2 is actually **~$166/year cheaper** than v1. The ALB always-on cost (~$202/year across 11 idle months) is completely offset by peak-month savings: removing API Gateway ($54) + Lambda ($46) + Glue ($10) = $110 cheaper per peak month, plus Aurora auto-shutdown saves another $19/mo on the 11 idle months.
+> **Counterintuitive finding:** With Aurora auto-shutdown in idle months, v2 is actually **~$165/year cheaper** than v1. The ALB always-on cost (~$202/year across 11 idle months) is completely offset by peak-month savings: removing API Gateway ($54) + Lambda ($46) + Glue ($10) = $110 cheaper per peak month, plus Aurora auto-shutdown saves another $19/mo on the 11 idle months.
 >
-> If you keep Aurora always-on in v2 (no auto-shutdown), the annual cost is ~$54/year more than v1 — a negligible premium for portability.
+> If you keep Aurora always-on in v2 (no auto-shutdown), the annual cost is ~$55/year more than v1 — a negligible premium for portability.
 >
 > **Bottom line:** the v2 (Fargate) architecture is essentially cost-neutral or potentially cheaper than v1 (Lambda), assuming you use Aurora auto-shutdown. The "portability premium" story is more about operational trade-offs (slower cold starts, ALB always-on) than annual AWS bill.
 
@@ -258,17 +261,17 @@ ALB is the dominant cost in the dev environment for the v2 architecture — it's
 
 | Metric | v1 (Lambda + Glue) | v2 (Fargate Re-Architecture) |
 |--------|---------------------|---------------------|
-| **Peak month (PAYG)** | ~$703 | ~$664 |
-| **Peak month (Business plan)** | ~$402 | ~$390 |
+| **Peak month (PAYG)** | ~$703 | ~$665 |
+| **Peak month (Business plan)** | ~$402 | ~$391 |
 | **Idle month (un-optimized)** | ~$74 | ~$93 |
 | **Idle month (optimized, Aurora auto-shutdown)** | ~$65 | ~$51 |
-| **Annual (optimized, WAF attached, Aurora auto-shutdown)** | ~$1,117 | ~$951 |
-| **Annual (optimized, WAF attached, Aurora always-on)** | ~$1,117 | ~$1,171 |
+| **Annual (optimized, WAF attached, Aurora auto-shutdown)** | ~$1,117 | ~$952 |
+| **Annual (optimized, WAF attached, Aurora always-on)** | ~$1,117 | ~$1,172 |
 | **Dev environment / month** | ~$29 | ~$42 |
 | **Portable to GCP/Azure?** | ❌ No (Lambda + Glue are AWS-only) | ✅ Yes (Docker image runs on any cloud) |
 | **Cold start** | ~100-500ms (Lambda) | ~10-30s (Fargate container start) |
 | **Max execution time** | 15 min (Lambda) | Unlimited (Fargate) |
-| **Cost premium for portability** | — | **-$166/year** (auto-shutdown) or **~$54/year** (Aurora always-on) |
+| **Cost premium for portability** | — | **-$165/year** (auto-shutdown) or **~$55/year** (Aurora always-on) |
 
 ---
 

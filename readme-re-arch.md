@@ -15,6 +15,7 @@ This document describes the **changes** from the original serverless architectur
 - [Architecture Delta](#architecture-delta)
 - [Service Migration Map](#service-migration-map)
 - [Abstraction Patterns for Portability](#abstraction-patterns-for-portability)
+- [Operations & Security](#operations--security)
 - [Request Flows (Changed)](#request-flows-changed)
 - [Portability Reference](#portability-reference)
 - [Migration Path to GCP or Azure](#migration-path-to-gcp-or-azure)
@@ -55,7 +56,7 @@ graph TB
     CF[CloudFront + WAF]:::unchanged
     ALB["Application Load Balancer<br/><b>NEW — replaces API Gateway</b>"]:::new
 
-    subgraph Fargate["Fargate — One Container Image"]
+    subgraph Fargate["Fargate — API + ETL Containers"]
         API["API Container<br/>FastAPI / Express<br/>Routes: /metrics, /validate<br/><b>Replaces Lambda ×2</b>"]:::new
         ETL["ETL Container<br/>Python + DuckDB/pandas<br/>Triggered on S3 upload<br/><b>Replaces Glue</b>"]:::new
     end
@@ -116,6 +117,7 @@ graph TB
 | Route 53 | DNS — swap to Cloud DNS / Azure DNS later |
 | CloudWatch + X-Ray | Observability — swap to Cloud Logging / Azure Monitor later |
 | Athena | Ad-hoc analytics — swap to BigQuery / Azure Synapse later |
+| **Reconciliation flow** | CloudWatch Scheduled → Athena → S3 Parquet vs DynamoDB → SNS. Unchanged — Athena queries S3 Parquet directly, independent of ETL runtime. See [Flow 5 in README.md](README.md#flow-5--reconciliation-automated). |
 
 ---
 
@@ -235,6 +237,127 @@ elif CLOUD == 'gcp':
 ```
 
 Docker image stays identical — only the runtime config changes.
+
+---
+
+## Operations & Security
+
+Moving from Lambda (isolated, ephemeral) to long-running Fargate containers introduces operational and security considerations.
+
+### Container Image Security
+
+| Concern | Mitigation |
+|---------|------------|
+| **Vulnerability scanning** | Enable ECR image scanning on push (basic or enhanced). Fail CI/CD pipeline on critical/high CVEs. |
+| **Base image updates** | Pin base images to specific digests (not `latest`). Subscribe to security advisories for `python:3.12-slim`. Rebuild images monthly to pick up OS patches. |
+| **Image signing** | Consider ECR image signing (AWS Signer) or Cosign for supply chain integrity. |
+| **Least privilege** | Separate ECS task execution role (pulls images, writes logs) from task role (app permissions). Task role should only have access to DynamoDB, S3, Aurora — not ECR. |
+| **Secrets injection** | Never bake secrets into images. Use ECS task definition `secrets` to pull from SSM Parameter Store or Secrets Manager at container start. |
+| **Log driver** | Use `awslogs` log driver to send container stdout/stderr to CloudWatch Logs. Configure log groups with retention policies. |
+
+### Cold Start Mitigation
+
+Fargate containers have ~10-30s cold start (image pull + container init). Strategies to minimize impact:
+
+| Strategy | Trade-off |
+|----------|-----------|
+| **Keep `min_tasks = 1` during election period** | Eliminates cold start for API container. ~$43/month for always-on base task. Recommended for election day. |
+| **Scheduled warming** | CloudWatch Event → `ecs:RunTask` every 5 min. Keeps a task warm but adds ~$10/month. Alternative to min_tasks=1. |
+| **ALB slow start mode** | Set deregistration delay to 30s, slow start to 120s. New tasks ramp up traffic gradually instead of receiving full load immediately. |
+| **Pre-provision before election** | Scale to 3-5 tasks 1 hour before polls close. Use CloudWatch Event or manual script. |
+
+**Recommendation:** Keep `min_tasks = 1` during election week (cost: ~$43/month). Scale to `min_tasks = 0` during idle months.
+
+### Auto-Scaling Configuration
+
+| Parameter | API Container | ETL Container |
+|-----------|--------------|---------------|
+| **Min tasks** | 0 (idle) / 1 (election) | 0 (always) |
+| **Max tasks** | 10 | 20 (parallel ETL jobs) |
+| **Scale-out metric** | ALB request count > 1000/target | Step Functions triggers task directly |
+| **Scale-out cooldown** | 60s | N/A (on-demand) |
+| **Scale-in cooldown** | 300s (avoid thrashing) | Task completes → auto-stops |
+| **Target tracking** | `RequestCountPerTarget` or `CPUUtilization` > 60% | N/A |
+
+**Election day scaling:** Set `min_tasks = 3` and `max_tasks = 20` for the API container. Pre-provision 1 hour before polls close.
+
+### Multi-AZ & Networking
+
+| Concern | Configuration |
+|---------|---------------|
+| **VPC** | Deploy Fargate tasks in private subnets across 2+ AZs |
+| **Security groups** | ALB SG: allow 80/443 from 0.0.0.0/0. Fargate SG: allow from ALB SG only. Aurora SG: allow from Fargate SG only. |
+| **Task networking** | Use `awsvpc` networking mode (required for Fargate). Each task gets its own ENI. |
+| **ALB target group** | Health check path: `/health`. Interval: 15s. Healthy threshold: 2. Unhealthy threshold: 3. Deregistration delay: 30s. |
+| **NAT Gateway** | Required for Fargate tasks to pull images from ECR and access AWS APIs. Place in one AZ to minimize cost (~$32/month) or one per AZ for HA (~$64/month). |
+
+### CI/CD Pipeline for Containers
+
+The Terraform CI/CD pipeline (see [TERRAFORM.md](docs/TERRAFORM.md)) needs a container build stage:
+
+```
+PR opened → Build Docker image → Run tests → Push to ECR (tagged with SHA)
+         → Terraform plan (references new image tag)
+Merge to main → Terraform apply → ECS rolling update (zero-downtime)
+```
+
+| Stage | Tool | Action |
+|-------|------|--------|
+| **Build** | GitHub Actions | `docker build -t pprcv-api:$SHA .` |
+| **Test** | GitHub Actions | Run unit/integration tests inside container |
+| **Scan** | ECR / Trivy | Scan image for CVEs. Fail on critical. |
+| **Push** | GitHub Actions | `docker push ECR_REPO:$SHA` and `:latest` |
+| **Deploy** | Terraform | Update ECS task definition with new image tag. ECS rolling deploy (200% max, 100% min). |
+
+**Image tagging:** Use Git SHA for traceability. Never deploy `:latest` to production.
+
+### Rollback Strategy
+
+If the Fargate migration has issues on election day:
+
+| Scenario | Action |
+|----------|--------|
+| **Container crash loop** | ECS auto-restarts tasks. If persistent, rollback to previous task definition (previous SHA tag). |
+| **Bad deployment** | `aws ecs update-service --task-definition pprcv-api:PREVIOUS_REVISION`. ECS rolls back in ~2 min. |
+| **Fargate outage** | Keep Lambda + API Gateway deployable as hot standby for the first election cycle. Maintain Lambda code in a separate directory, deployable via `sam deploy`. |
+| **ALB failure** | ALB is a managed service with built-in HA. If regional issue, Route 53 failover to a secondary region (future consideration). |
+
+**Recommendation:** For the first election cycle, keep the Lambda + API Gateway deployment as a hot standby. Decommission after one successful election on Fargate.
+
+### ETL Memory Sizing
+
+The ETL container is spec'd at **1 vCPU + 4 GB**. Concern: pandas loads entire DataFrames into memory.
+
+| Scenario | Estimated Memory | Risk |
+|----------|-----------------|------|
+| 1 GB CSV (pandas) | ~3-4 GB (DataFrame + processing overhead) | ⚠️ Borderline at 4 GB |
+| 2 GB CSV (pandas) | ~6-8 GB | ❌ Will OOM at 4 GB |
+| 1 GB CSV (DuckDB) | ~1-2 GB (streaming, memory-mapped) | ✅ Safe |
+| 2 GB CSV (DuckDB) | ~2-3 GB | ✅ Safe |
+
+**Recommendations:**
+- **Use DuckDB, not pandas**, for ETL processing. DuckDB is memory-efficient and handles larger-than-memory datasets.
+- If pandas is required, process CSVs in chunks (`pd.read_csv(chunksize=100_000)`).
+- Bump ETL container to **1 vCPU + 8 GB** as a safety margin (~$0.009/GB-h more).
+- Profile with real CSV data before production: run the 2 GB worst-case file in a test Fargate task and monitor memory via CloudWatch Container Insights.
+
+### Local Development Experience
+
+Developers need to run the containerized app locally without AWS:
+
+| Approach | Setup |
+|----------|-------|
+| **Docker Compose** | Provide `docker-compose.yml` with local Postgres + localstack (for S3/DynamoDB emulation). |
+| **Config switching** | Set `CLOUD_PROVIDER=local` in `.env`. Implement `LocalStorageClient` (writes to local filesystem), `LocalMetricsRepository` (in-memory or local DynamoDB). |
+| **Local Postgres** | `docker run -p 5432:5432 postgres:15`. Use `ValidationRepository` with local connection string. |
+| **Test data** | Provide sample CSV files (1000 rows) in `tests/fixtures/`. |
+
+```bash
+# Recommended local dev workflow
+docker-compose up -d          # Start local Postgres + localstack
+export CLOUD_PROVIDER=local   # Use local implementations
+python -m uvicorn app.main    # Run API container locally
+```
 
 ---
 
@@ -366,6 +489,15 @@ The Dockerfile doesn't change. The container registry changes (ECR → Artifact 
 
 Step Functions → Workflows / Logic Apps is a config rewrite, not a code rewrite. The Fargate/Cloud Run/Container Apps ETL container doesn't change.
 
+**Step Functions Standard vs Express:**
+
+| Type | Price | Use Case | Trade-off |
+|------|-------|----------|-----------|
+| **Standard** | $0.025/1K transitions | Long-running workflows, need execution history | 1-year execution history, exactly-once, max 25K executions |
+| **Express** | $1.00/M transitions | High-volume, fire-and-forget ETL | 25x cheaper, 5-min max duration, at-least-once |
+
+**Recommendation:** Use **Standard Workflows** for the initial deployment. The cost difference is negligible (~$0.06 vs ~$0.003 for 500 executions). Standard provides better observability (execution history in CloudWatch) and exactly-once semantics for ETL jobs. Switch to Express if ETL volume exceeds 10K executions/month.
+
 ### Aurora Serverless v2 (Standard Postgres Connection)
 
 Aurora Serverless v2's auto-scaling (0.5–16 ACU) is AWS-specific. When moving clouds:
@@ -460,7 +592,9 @@ resource "google_storage_bucket" "data" { ... }
 CLOUD_PROVIDER=gcp  # was: aws
 
 # Restart containers — they pick up new implementations
-kubectl rollout restart deployment/ppcrv-api  # or equivalent
+aws ecs update-service --cluster pprcv --service pprcv-api --force-new-deployment  # AWS
+# or
+kubectl rollout restart deployment/ppcrv-api  # if using EKS
 ```
 
 ---
@@ -469,12 +603,12 @@ kubectl rollout restart deployment/ppcrv-api  # or equivalent
 
 | # | Item | Status |
 |---|------|--------|
-| 1 | Decide: keep ALB always-on during idle or destroy/recreate | Open |
-| 2 | Choose Docker base image (python:3.11-slim vs node:20-slim) | Open — depends on language choice |
+| 1 | Decide: keep ALB always-on during idle or destroy/recreate | **Decided** — keep ALB always-on (see [cost-re-arch.md](cost-re-arch.md#alb-decision-always-on-vs-destroy)) |
+| 2 | Choose Docker base image (python:3.12-slim vs node:20-slim) | Open — depends on language choice |
 | 3 | Choose web framework for API container (FastAPI / Express / Go) | Open |
-| 4 | Choose ETL processing library (pandas vs DuckDB vs both) | Open — benchmark with real CSV data |
+| 4 | Choose ETL processing library (pandas vs DuckDB vs both) | **Decided** — use DuckDB (see [ETL Memory Sizing](#etl-memory-sizing)) |
 | 5 | Implement Step Functions state machine for ETL fan-out | Open |
-| 6 | Define container resource sizing (vCPU / memory per task) | Open |
+| 6 | Define container resource sizing (vCPU / memory per task) | **Decided** — API: 1 vCPU / 2 GB, ETL: 1 vCPU / 8 GB (see [Auto-Scaling Configuration](#auto-scaling-configuration)) |
 | 7 | Decide: Aurora auto-shutdown schedule in dev (see cost-re-arch.md) | Open |
 
 ---
