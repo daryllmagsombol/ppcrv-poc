@@ -47,13 +47,13 @@ The **Re-Architecture** replaces these with **Fargate containers**:
 ```mermaid
 graph TB
     classDef new fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
-    classDef removed fill:#ffebee,stroke:#c62828,stroke-width:1px,stroke-dasharray: 5 5
     classDef unchanged fill:#e3f2fd,stroke:#1976d2,stroke-width:1px
 
     Public[Public Clients]
     Volunteer[Volunteer Clients]
 
     CF[CloudFront + WAF]:::unchanged
+    S3UI[S3 Static UI<br/>Frontend Host]:::unchanged
     ALB["Application Load Balancer<br/><b>NEW — replaces API Gateway</b>"]:::new
 
     subgraph Fargate["Fargate — API + ETL Containers"]
@@ -72,7 +72,8 @@ graph TB
 
     Public --> CF
     Volunteer --> CF
-    CF --> ALB
+    CF -->|Static assets| S3UI
+    CF -->|API routes| ALB
     ALB --> API
     API --> Aurora
     API --> DDB
@@ -111,7 +112,8 @@ graph TB
 |------|----------------------|
 | Aurora Serverless v2 | Accessed via standard Postgres connection (no Aurora APIs) |
 | DynamoDB | Wrapped in Repository interface (swap impl when moving clouds) |
-| S3 | Storage abstraction (swap impl to GCS / Blob later) |
+| S3 (static UI hosting) | Unchanged — static assets (HTML/JS) served via CloudFront. Swap to GCS / Blob Storage later. |
+| S3 (data storage) | Storage abstraction (swap impl to GCS / Blob later) |
 | SNS + SQS | Messaging abstraction (swap impl to Pub/Sub / Service Bus later) |
 | CloudFront + WAF | Edge layer — swap to Cloud CDN / Azure CDN later |
 | Route 53 | DNS — swap to Cloud DNS / Azure DNS later |

@@ -27,6 +27,54 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-08 — Reviewed and improved Re-Architecture docs
+
+**Files changed:** `readme-re-arch.md`, `cost-re-arch.md`
+**Author:** Daryll (Claude)
+**Summary:** Reviewed the re-architecture docs for gaps, inconsistencies, and missing operational/security considerations. Added a comprehensive Operations & Security section, fixed cost inconsistencies, and updated Open Items with decisions.
+
+### What changed
+
+**Fixes:**
+- Fixed architecture diagram label: "One Container Image" → "API + ETL Containers" (misleading since there are two distinct container types)
+- Fixed Lambda S3 Trigger inconsistency: moved from "Removed Services" to "Unchanged" in cost-re-arch.md (the trigger still exists in v2, now triggers Step Functions instead of Glue)
+- Updated all cost calculations to reflect the $1 difference (~$665 peak instead of ~$664)
+- Fixed Python version in Open Items: 3.11 → 3.12 (3.11 EOL in ~2 years)
+- Fixed kubectl command → ECS command for Fargate deployment (Fargate uses ECS, not Kubernetes)
+- Clarified Step Functions cost calculation (500 executions × 3 transitions × $0.025/1K)
+
+**New section — Operations & Security (readme-re-arch.md):**
+- **Container image security:** ECR scanning, base image updates, image signing, least privilege (task vs execution role), secrets injection, awslogs log driver
+- **Cold start mitigation:** min_tasks=1 during election, scheduled warming, ALB slow start, pre-provisioning before election
+- **Auto-scaling configuration:** min/max tasks, scale-out metrics, cooldowns, target tracking for both API and ETL containers
+- **Multi-AZ & networking:** VPC/subnet config, security group rules, awsvpc networking, ALB health check config, NAT Gateway considerations
+- **CI/CD pipeline for containers:** Build → test → scan → push → deploy pipeline with image tagging strategy (Git SHA, not :latest)
+- **Rollback strategy:** Container crash loop, bad deployment, Fargate outage (Lambda hot standby for first election cycle), ALB failure
+- **ETL memory sizing:** pandas vs DuckDB memory comparison, recommendation to use DuckDB, chunked processing fallback, bump to 8 GB
+- **Local development experience:** Docker Compose with localstack, CLOUD_PROVIDER=local config, local Postgres, test fixtures
+
+**New section — Step Functions Express vs Standard (readme-re-arch.md):**
+- Added comparison table with pricing, use cases, and trade-offs
+- Recommendation: Standard Workflows for initial deployment (better observability, exactly-once)
+
+**Updated What's Unchanged table:**
+- Added reconciliation flow reference (CloudWatch Scheduled → Athena → S3 Parquet vs DynamoDB → SNS)
+- Note that it's unchanged since Athena queries S3 Parquet directly, independent of ETL runtime
+
+**Updated Open Items table:**
+- Marked ALB decision as decided (keep always-on, see cost-re-arch.md)
+- Marked ETL library as decided (use DuckDB, see ETL Memory Sizing)
+- Marked container resource sizing as decided (API: 1 vCPU/2 GB, ETL: 1 vCPU/8 GB)
+
+### Why
+- User requested review of re-architecture docs for gaps and improvements
+- The docs were thorough on architecture and cost but lacked operational/security guidance for actually running the containers in production
+- The Lambda S3 Trigger inconsistency between the two docs needed correction
+- Adding cold start mitigation, auto-scaling, networking, and rollback guidance makes the docs actionable for implementation
+- ETL memory sizing concern (pandas OOM on 2 GB CSVs) is a real production risk that needed to be documented
+
+---
+
 ## 2026-07-08 — Created cloud-portable Re-Architecture (Fargate-based)
 
 **Files changed:** `readme-re-arch.md` (new), `cost-re-arch.md` (new)
