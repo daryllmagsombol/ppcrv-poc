@@ -27,6 +27,44 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-08 — Created cloud-portable Re-Architecture (Fargate-based)
+
+**Files changed:** `readme-re-arch.md` (new), `cost-re-arch.md` (new)
+**Author:** Team Leader (Claude)
+**Summary:** Designed a cloud-portable variant of the PPCRV architecture that replaces AWS-specific services (Lambda, Glue, API Gateway) with Fargate containers, enabling the same Docker images to run on GCP Cloud Run or Azure Container Apps with minimal changes.
+
+### Decisions made through Q&A
+- **Portability scope:** Keep the option open for GCP/Azure, not multi-cloud deployment
+- **Compute:** Replace Lambda (3 functions) + Glue with Fargate containers (one container image for API + one for ETL)
+- **API routing:** Replace API Gateway with ALB (cheaper at scale, more portable to GCP Cloud LB / Azure App Gateway)
+- **Database:** Keep DynamoDB (with Repository abstraction for later swap) and Aurora Serverless v2 (accessed via standard Postgres connection only)
+- **Other services:** Keep S3, SNS, SQS, CloudFront, WAF, Route 53, CloudWatch — all behind abstraction interfaces so swapping clouds means writing new impls, not touching container code
+
+### Architecture delta
+- **Removed:** API Gateway, Lambda Vote Metrics, Lambda Validation, AWS Glue (Spark)
+- **Added:** Fargate API container, Fargate ETL container, ALB, Step Functions (ETL orchestration)
+- **Abstraction layer:** Four interfaces (MetricsRepository, ValidationRepository, StorageClient, MessageQueue) with AWS impls today and GCP/Azure impls later
+- Single `CLOUD_PROVIDER` env var flips the entire backend — same Docker image everywhere
+
+### Cost impact (self-review corrected arithmetic errors)
+| Metric | v1 (Lambda) | v2 (Fargate) |
+|--------|------------|--------------|
+| Peak month (un-optimized) | ~$703 | ~$664 (~5% cheaper) |
+| Peak month (optimized, Business plan) | ~$402 | ~$390 |
+| Idle month (un-optimized) | ~$74 | ~$93 (+$19 for ALB) |
+| Idle month (optimized, Aurora auto-shutdown) | ~$65 | ~$51 |
+| Annual (optimized, auto-shutdown) | ~$1,117 | **~$951** ($166 cheaper) |
+| Annual (optimized, always-on Aurora) | ~$1,117 | ~$1,171 ($54 more) |
+
+**Counterintuitive finding:** The Fargate architecture can be **cheaper** than Lambda with Aurora auto-shutdown. The ALB always-on cost (~$202/year) is offset by removing API Gateway + Lambda + Glue (~$110/month peak). The "cost premium for portability" is $0/year with auto-shutdown, or ~$54/year without it.
+
+### Why
+- User request: make the architecture compatible with other cloud providers (GCP or Azure) while building on AWS now
+- Fargate containers are the portability anchor — Docker images run on any cloud
+- Repository interfaces ensure platform-specific SDKs don't bleed into application code
+
+---
+
 ## 2026-07-03 — Created CloudFormation/SAM exploration document (CLOUDFORMATION.md)
 
 **Files changed:** `docs/CLOUDFORMATION.md` (new), `docs/TERRAFORM.md`, `README.md`
