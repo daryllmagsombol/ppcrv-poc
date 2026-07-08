@@ -46,45 +46,70 @@ The **Re-Architecture** replaces these with **Fargate containers**:
 
 ```mermaid
 graph TB
+    classDef client fill:#e1f5fe,stroke:#0288d1,stroke-width:2px
+    classDef edge fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef api fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
     classDef new fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
-    classDef unchanged fill:#e3f2fd,stroke:#1976d2,stroke-width:1px
+    classDef storage fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef etl fill:#fce4ec,stroke:#c62828,stroke-width:2px
+    classDef obs fill:#eceff1,stroke:#546e7a,stroke-width:1px,stroke-dasharray: 5 5
 
-    Public[Public Clients]
-    Volunteer[Volunteer Clients]
-
-    CF[CloudFront + WAF]:::unchanged
-    S3UI[S3 Static UI<br/>Frontend Host]:::unchanged
-    ALB["Application Load Balancer<br/><b>NEW — replaces API Gateway</b>"]:::new
-
-    subgraph Fargate["Fargate — API + ETL Containers"]
-        API["API Container<br/>FastAPI / Express<br/>Routes: /metrics, /validate<br/><b>Replaces Lambda ×2</b>"]:::new
-        ETL["ETL Container<br/>Python + DuckDB/pandas<br/>Triggered on S3 upload<br/><b>Replaces Glue</b>"]:::new
+    subgraph Ext["External Clients"]
+        Public[Public Clients<br/>Access UI + Query]
+        Volunteer[Volunteer Clients<br/>Validate + Upload CSV]
     end
 
-    S3Upload[S3 Upload Bucket]:::unchanged
-    S3Trigger["Lambda Trigger<br/>(tiny — just schedules ETL task)"]:::unchanged
-    SF["Step Functions<br/>Orchestrates ETL fan-out"]:::new
-    S3Parquet[S3 Parquet]:::unchanged
-    Aurora[Aurora Serverless v2<br/>Postgres connection]:::unchanged
-    DDB[DynamoDB<br/>via Repository interface]:::unchanged
-    SNS[SNS]:::unchanged
-    SQS[SQS DLQ]:::unchanged
+    subgraph AWS["AWS Cloud"]
+        CF[CloudFront + WAF<br/>CDN / Edge Cache / DDoS]:::edge
+        S3UI[S3 Static UI<br/>Frontend Host]:::storage
+        ALB["Application Load Balancer<br/>Throttling + Health Checks<br/><b>NEW — replaces API Gateway</b>"]:::new
 
-    Public --> CF
-    Volunteer --> CF
-    CF -->|Static assets| S3UI
-    CF -->|API routes| ALB
-    ALB --> API
-    API --> Aurora
-    API --> DDB
+        subgraph FargateAPI["Fargate — API Container"]
+            API["API Container<br/>FastAPI / Express<br/>Routes: /metrics, /validate<br/><b>Replaces Lambda ×2</b>"]:::new
+        end
 
+        subgraph FargateETL["Fargate — ETL Container"]
+            ETL["ETL Container<br/>Python + DuckDB/pandas<br/>Triggered by Step Functions<br/><b>Replaces Glue</b>"]:::new
+        end
+
+        SF["Step Functions<br/>Orchestrates ETL fan-out<br/><b>NEW</b>"]:::new
+        Trigger["Lambda Trigger<br/>S3 ObjectCreated<br/>(tiny scheduler)"]:::api
+        CW["CloudWatch + X-Ray<br/>Alarms / Dashboards / Tracing"]:::obs
+
+        S3Upload[S3 CSV Upload<br/>Raw Uploads]:::storage
+        S3Parquet[S3 Parquet<br/>Raw Data — Audit Trail]:::storage
+        DDBMetrics[DynamoDB Metrics<br/>Aggregated Votes]:::storage
+        DDBStatus[DynamoDB Status<br/>Precinct Tracking]:::storage
+        Aurora[Aurora Serverless v2<br/>Validation DB]:::storage
+        SQS[SQS DLQ<br/>Failed Invocations]:::storage
+        SNS[SNS<br/>Failure Alerts]:::storage
+    end
+
+    Public -->|Access UI| CF
+    Public -->|Query Metrics| CF
+    Volunteer -->|Validate API| CF
     Volunteer -->|Upload CSV| S3Upload
-    S3Upload -->|S3 Event| S3Trigger
-    S3Trigger -->|Start Task| SF
+
+    CF -->|Static HTML| S3UI
+    CF -->|Metrics Route| ALB
+    CF -->|Validation Route| ALB
+
+    ALB --> API
+    API -->|Query cache| DDBMetrics
+    API -->|Insert records| Aurora
+    API -.->|Metrics + logs| CW
+
+    S3Upload -->|S3 Event| Trigger
+    Trigger -->|Start Task| SF
+    Trigger -.->|Dead letter| SQS
+    SQS -->|Failure alert| SNS
+
     SF -->|Run 1-N parallel| ETL
-    ETL -->|Write Parquet| S3Parquet
-    ETL -->|Write metrics| DDB
-    ETL -->|Failure| SNS
+    ETL -->|Write raw data| S3Parquet
+    ETL -->|Update status| DDBStatus
+    ETL -->|Write metrics| DDBMetrics
+    ETL -.->|Failure| SNS
+    ETL -.->|Metrics + logs| CW
 ```
 
 ### What's Removed
