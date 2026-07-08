@@ -289,10 +289,34 @@ v3 dev is more expensive than v1/v2 due to Redis always-on in dev ($12/mo for `c
 | **Services to migrate per cloud** | 10+ | ~8 | **~5** |
 | **Abstraction interfaces needed** | 4 | 4 | **2** |
 | **Cold start (API query)** | ~100-500ms (Lambda) | ~10-30s (Fargate) | ~10-30s (Fargate) |
-| **Cold start (after Redis auto-shutdown)** | — | — | ~5 min (rebuild) |
+| **Cold start (after Redis auto-shutdown)** | — | — | ~30 sec (with RDB) / ~5 min (without) |
 | **Vote metrics read latency** | 5-10ms (DynamoDB) | 5-10ms (DynamoDB) | **<1ms (Redis)** |
 | **Max ETL execution time** | 15 min (Lambda) | Unlimited (Fargate) | Unlimited (Fargate) |
 | **Portable to GCP/Azure?** | ❌ | ✅ | ✅ (fewer services to reimplement) |
+| **Redis HA (Multi-AZ)** | — | — | **~$50/mo** (optional, post-MVP) |
+
+---
+
+## Redis Multi-AZ & RDB Snapshots (Optional)
+
+### Multi-AZ ElastiCache (Production HA)
+
+| Configuration | Nodes | Monthly Cost | RTO |
+|---------------|-------|--------------|-----|
+| Single node (MVP) | 1 × `cache.t3.small` | ~$25 | ~5 min (rebuild from S3) |
+| Multi-AZ (primary + replica) | 2 × `cache.t3.small` | **~$50** | ~30 sec (auto-failover) |
+
+**Recommendation:** Single node for MVP. Upgrade to Multi-AZ after launch if Redis is a bottleneck. The ~5 min rebuild from S3 is acceptable for a greenfield project.
+
+### RDB Snapshots (Reduce Rebuild Time)
+
+| Strategy | Storage Cost | Restart Time | Rebuild Needed |
+|----------|-------------|--------------|----------------|
+| No RDB | $0 | ~5 min | Full Athena rebuild |
+| RDB every 15 min | ~$0.50/mo (S3 storage) | ~30 sec | Only data changed since snapshot |
+| RDB + AOF | ~$1/mo | ~10 sec | Near-zero data loss |
+
+**Impact on annual cost:** +$6/year for RDB snapshots. Reduces "Redis restart → 5 min rebuild" to ~30 seconds.
 
 ---
 
@@ -340,8 +364,10 @@ Azure Redis pricing is tiered. C0 (250 MB) might be too small for 32M rows of me
 4. **Rebuild cost** — Athena charges $5/TB scanned. 32M rows of Parquet at ~9 columns averages ~3-5 GB compressed → ~$0.015-0.025 per rebuild. The $0.50/run estimate is conservative.
 5. **Aurora Serverless v2** — costs identical to v2. Only usage changes (standard SQL only, no Aurora-specific features). No cost delta.
 6. **No Reserved Capacity assumed** — all prices are on-demand for planning purposes. Reserved instances (Redis, RDS, Fargate Savings Plans) can reduce annual cost further.
-7. **Per-cloud cost variance** — AWS tends to be cheapest for managed services in Southeast Asia. GCP and Azure may be 20-50% more expensive for equivalent Redis/Postgres instances. Migration cost includes this monthly premium in addition to the one-time migration effort.
-8. **Athena/BigQuery/Synapse** — rebuild script uses cloud analytics to query S3 Parquet. Cost per rebuild is minimal (<$1). Migration between clouds means swapping the analytics client library, not rewriting the rebuild logic.
+7. **Multi-AZ Redis** — adds ~$25/mo (2× node cost). Optional, recommended for production post-MVP. Single node + RDB snapshots is sufficient for MVP.
+8. **RDB snapshots** — ~$0.50/mo for S3 storage of the snapshot file. Reduces restart time from ~5 min to ~30 sec. Recommended during election week.
+9. **Per-cloud cost variance** — AWS tends to be cheapest for managed services in Southeast Asia. GCP and Azure may be 20-50% more expensive for equivalent Redis/Postgres instances. Migration cost includes this monthly premium in addition to the one-time migration effort.
+10. **Athena/BigQuery/Synapse** — rebuild script uses cloud analytics to query S3 Parquet. Cost per rebuild is minimal (<$1). Migration between clouds means swapping the analytics client library, not rewriting the rebuild logic.
 
 ---
 

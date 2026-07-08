@@ -641,6 +641,23 @@ src/
 
 ---
 
+## Optimizations (Post-Design)
+
+The following optimizations were identified during the design review:
+
+| # | Optimization | Impact | Effort | When |
+|---|-------------|--------|--------|------|
+| 1 | **CloudFront edge-cache API responses** (`/api/metrics`, 30s TTL) | Cuts API load 70-90% | Low | MVP |
+| 2 | **Graceful ETL shutdown** (SIGTERM handler) | Prevents 10-min stale job recovery | Low | MVP |
+| 3 | **Presigned S3 upload URLs** | Removes 2GB bandwidth from API container | Low | MVP |
+| 4 | **PgBouncer sidecar** (Postgres connection pooling) | Prevents 400+ connection exhaustion | Medium | MVP |
+| 5 | **Redis RDB snapshots** (15-min during election week) | Restart time: 5 min → 30 sec | Low | MVP |
+| 6 | **CSV schema validation** (Lambda Trigger pre-queue gate) | Prevents bad CSVs wasting ETL compute | Low | MVP |
+| 7 | **Multi-AZ Redis** (primary + replica) | RTO: 5 min → 30 sec, auto-failover | ~$25/mo extra | Post-MVP |
+| 8 | **Redis-backed rate limiting** (per-API-key, 100 req/min) | Fine-grained abuse control | Medium | Post-MVP |
+
+---
+
 ## Open Items
 
 | # | Item | Status |
@@ -655,6 +672,12 @@ src/
 | 8 | Design WAF rules per cloud (AWS WAF, GCP Armor, Azure WAF) | Open |
 | 9 | Verify CloudFront Business plan month-to-month switching with AWS Support | Open |
 | 10 | Benchmark Redis pub/sub latency for cache invalidation path | Open |
+| 11 | Implement CloudFront edge-caching for `/api/metrics` | Open |
+| 12 | Add graceful shutdown handler (SIGTERM) to ETL worker | Open |
+| 13 | Implement presigned S3 upload URL endpoint | Open |
+| 14 | Add PgBouncer sidecar for Postgres connection pooling | Open |
+| 15 | Enable Redis RDB snapshots (15-min interval during election week) | Open |
+| 16 | Add CSV schema validation to Lambda Trigger | Open |
 
 ---
 

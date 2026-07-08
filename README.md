@@ -636,11 +636,139 @@ Infrastructure is provisioned via **Terraform** with independent modules per clo
 
 ---
 
+## Optimizations & Operational Details
+
+### Multi-AZ Redis (High Availability)
+
+v3 MVP uses a single Redis node. For production, add Multi-AZ ElastiCache (AWS) or equivalent:
+
+| Option | Nodes | Monthly Cost | RTO |
+|--------|-------|--------------|-----|
+| **Single node** (MVP) | 1 | ~$25 | ~5 min (rebuild from S3) |
+| **Multi-AZ** (recommended for prod) | 2 (primary + replica, different AZs) | ~$50 | ~30 sec (auto-failover) |
+| **Redis Sentinel** (self-managed) | 3 Sentinel + 1 primary + 1 replica | ~$30 + ops burden | ~10 sec |
+
+**Recommendation:** Start with single node (MVP). Upgrade to Multi-AZ after launch if Redis is a bottleneck. The ~5 min rebuild from S3 is acceptable for a greenfield project.
+
+### CloudFront Edge-Caching for API Responses
+
+CloudFront caches static assets. It can also cache API responses at the edge:
+
+```yaml
+# CloudFront Behavior for /api/metrics
+Path: /api/metrics?*
+Origin: ALB
+Cache TTL: 30s
+Query strings: Include (precinct parameter matters)
+```
+
+**Impact:** A precinct with 10K visitors gets 1 API call + 9,999 edge cache hits. API container load drops ~70-90% during peak.
+
+**Trade-off:** 30-second stale data. Acceptable for election results (UI already shows "updated X seconds ago").
+
+### Graceful ETL Shutdown
+
+When Fargate scales down, tasks receive SIGTERM. The ETL container handles it cleanly:
+
+```python
+import signal
+import sys
+
+def handle_sigterm(signum, frame):
+    # Finish current CSV, update Redis status, exit
+    redis.set("ETL:shutdown_requested", "true")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, handle_sigterm)
+```
+
+Without graceful shutdown, a killed task leaves the job in `etl:processing` until the watchdog catches it (10 min delay).
+
+### Presigned S3 Upload URLs
+
+Volunteers upload 2GB CSV files. Instead of proxying through the API container:
+
+```
+Volunteer Browser → API: GET /upload-url (filename)
+              ← API: S3 presigned URL (15 min expiry)
+Volunteer Browser → S3: PUT CSV directly (multipart upload)
+              → S3: ObjectCreated event → Lambda Trigger → Redis queue
+```
+
+**Benefits:**
+- No bandwidth through API container
+- No memory pressure on API
+- S3 handles multipart upload natively (resumable, parallel)
+- 2GB file uploads don't affect API performance
+
+### PgBouncer (Postgres Connection Pooling)
+
+Each Fargate API task opens its own Postgres connection. At 20 tasks × 20 connections = 400 connections, approaching Aurora's ~500 max.
+
+**Fix:** Add PgBouncer as a sidecar in the API task definition:
+- Reduces connections from 400 → 20
+- Reuses idle connections
+- Standard tool, works on all clouds
+- Cost: negligible (runs in same Fargate task, ~50MB memory)
+
+### Redis RDB Snapshots
+
+Redis supports periodic disk snapshots (RDB). This reduces rebuild time after restart:
+
+| Strategy | RDB Enabled | Restart Time | Rebuild Needed |
+|----------|-------------|--------------|----------------|
+| No RDB | No | ~5 min | Full Athena rebuild |
+| RDB every 15 min | Yes | ~30 sec | Only data changed since snapshot |
+| RDB + AOF | Yes | ~10 sec | Near-zero data loss |
+
+**Recommendation:** Enable RDB snapshots every 15 minutes during election week. Disable during idle (no writes). The rebuild script becomes a safety net, not the primary recovery path.
+
+**Storage cost:** RDB snapshot file (~25MB) stored in S3 → ~$0.50/month.
+
+### API Rate Limiting (WAF + Redis)
+
+| Layer | Mechanism | Granularity |
+|-------|-----------|-------------|
+| WAF | IP-based rate limit | Coarse — blocks IPs |
+| ALB | Connection throttling | Coarse — connection count |
+| API (Redis-backed) | Per-API-key sliding window | Fine-grained, configurable |
+
+**Current:** WAF provides basic IP-based protection.
+**Future:** Add Redis-backed rate limiter for per-user/per-session control:
+
+```python
+# Rate limit: 100 requests/minute per API key
+def check_rate_limit(api_key):
+    key = f"ratelimit:{api_key}"
+    current = redis.incr(key)
+    if current == 1:
+        redis.expire(key, 60)
+    return current <= 100
+```
+
+### CSV Schema Validation (Pre-Queue)
+
+The Lambda Trigger validates CSV structure before queuing:
+
+```python
+def validate_csv(file_key):
+    header = read_first_line(file_key)
+    required = ["PRECINCT_CODE", "CONTEST_CODE", "CANDIDATE_CODE",
+                "PARTY_CODE", "VOTES_AMOUNT"]
+    if not all(col in header for col in required):
+        return False  # Rejected — bad CSV never enters ETL
+    return True
+```
+
+Prevents malformed CSVs from wasting ETL compute.
+
+---
+
 ## Open Items
 
 | # | Item | Status |
 |---|------|--------|
-| 1 | Benchmark Redis `GET` throughput on `cache.t3.small` for 50M requests | Open |
+| 1 | Benchmark Redis `GET` throughput on `cache.t3.micro` for 50M requests | Open |
 | 2 | Benchmark DuckDB ETL performance on 2GB CSV with 4 vCPU | Open |
 | 3 | Implement Redis Rebuild Script + test with real S3 Parquet data | Open |
 | 4 | Determine Redis auto-shutdown schedule + startup trigger mechanism | Open |
@@ -652,6 +780,12 @@ Infrastructure is provisioned via **Terraform** with independent modules per clo
 | 10 | Benchmark Redis pub/sub latency for cache invalidation path | Open |
 | 11 | Implement ETL watchdog for stale job recovery | Open |
 | 12 | Evaluate Redis `cache.t3.micro` (0.5 GB) for dev vs `cache.t3.small` (1.37 GB) for prod | Open |
+| 13 | Implement CloudFront edge-caching for `/api/metrics` responses | Open |
+| 14 | Add graceful shutdown handler (SIGTERM) to ETL worker | Open |
+| 15 | Implement presigned S3 upload URL endpoint | Open |
+| 16 | Add PgBouncer sidecar for Postgres connection pooling | Open |
+| 17 | Enable Redis RDB snapshots (15-min interval during election week) | Open |
+| 18 | Add CSV schema validation to Lambda Trigger | Open |
 
 ---
 
