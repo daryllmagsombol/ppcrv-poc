@@ -100,7 +100,8 @@ con.close()
 python3 -c "
 import duckdb
 con = duckdb.connect()
-print(con.table('read_parquet(\"output/**/*.parquet\")').fetchall())
+for row in con.execute(\"SELECT * FROM read_parquet('output/**/*.parquet') LIMIT 10\").fetchall():
+    print(row)
 con.close()
 "
 ```
