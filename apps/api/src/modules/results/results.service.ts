@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { execSync } from 'child_process';
+import * as path from 'path';
 import { ResultQueryDto } from './dto/result-query.dto';
 import { ResultsResponse, CandidateResult } from './dto/results-response.dto';
 
@@ -8,7 +9,10 @@ export class ResultsService {
   private readonly parquetBase: string;
 
   constructor() {
-    this.parquetBase = process.env.PARQUET_BASE_PATH || './output';
+    // Default: resolve relative to project root (2 levels up from apps/api/)
+    this.parquetBase =
+      process.env.PARQUET_BASE_PATH ||
+      path.resolve(__dirname, '..', '..', '..', '..', 'output');
   }
 
   queryResults(dto: ResultQueryDto): ResultsResponse {
