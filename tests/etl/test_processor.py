@@ -96,4 +96,5 @@ def test_real_results_csv(tmp_path: Path):
     assert result.total_votes == 0
     assert result.precinct_count == 1
     assert result.contest_count == 1
-    assert len(result.output_files) == 1
+    # Use >= 1 to tolerate DuckDB splitting a partition into multiple files
+    assert len(result.output_files) >= 1

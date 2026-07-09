@@ -27,6 +27,44 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-09 — Added local ETL testing setup with DuckDB + Postgres
+
+**Files changed:** `pyproject.toml` (new), `src/etl/__init__.py` (new), `src/etl/models.py` (new), `src/etl/processor.py` (new), `tests/etl/__init__.py` (new), `tests/etl/test_processor.py` (new), `tests/etl/fixtures/sample.csv` (new), `tests/etl/fixtures/multiple.csv` (new), `tests/etl/fixtures/edge.csv` (new), `scripts/load_ref_data.py` (new), `docs/CHANGES.md`, `docs/superpowers/specs/2026-07-09-etl-local-testing-design.md` (new), `docs/superpowers/plans/2026-07-09-etl-local-testing.md` (new)
+**Author:** Team Leader (subagents)
+**Summary:** Set up local ETL testing infrastructure for PPCRV v3 election monitoring using DuckDB (CSV → Parquet aggregation) and Postgres (reference data). Pure Python + pytest, no Docker or cloud SDK needed.
+
+### What changed
+
+**Project scaffold:**
+- `pyproject.toml` with dev deps: duckdb, pytest, pyarrow, psycopg2-binary
+- Package structure under `src/etl/` and `tests/etl/`
+
+**Data models (`src/etl/models.py`):**
+- `AggregationResult` dataclass with `total_votes`, `precinct_count`, `contest_count`, `output_files`
+
+**Core processor (`src/etl/processor.py`):**
+- `parse_and_aggregate(csv_path, output_dir, partition_by)` — reads CSV via DuckDB `read_csv_auto`, aggregates `SUM(VOTES_AMOUNT)` grouped by precinct/contest/candidate/party, writes partitioned Parquet files
+
+**Postgres reference data loader (`scripts/load_ref_data.py`):**
+- Idempotent loader (`INSERT ... ON CONFLICT DO NOTHING`) for `pprcv_local` DB
+- Loads 4 reference tables (parties, contests, precincts, candidates) from `sample-csv/`
+- Fixes party-list candidates with empty `PARTIES_CODE` → SQL NULL (FK constraint)
+
+**Test suite (`tests/etl/test_processor.py`):**
+- 6 pytest tests: simple aggregation, multiple precincts, empty CSV, valid Parquet, idempotent output, real-world `results.csv`
+
+**Design docs:**
+- `docs/superpowers/specs/2026-07-09-etl-local-testing-design.md` — design decisions and Approach 1 rationale
+- `docs/superpowers/plans/2026-07-09-etl-local-testing.md` — 3-task implementation plan with step-by-step instructions
+
+### Why
+- Needed a local ETL testing setup that works without cloud dependencies or Docker
+- DuckDB handles CSV → Parquet aggregation in-process, no Spark/Flink needed
+- Postgres reference data validates FK assumptions against real `sample-csv/` data (caught party-list NULL issue)
+- Real data from `sample-csv/` contains 141K+ rows across 4 reference tables + results.csv
+
+---
+
 ## 2026-07-08 — Reviewed and improved v3 architecture docs
 
 **Files changed:** `README.md`, `docs/cost-re-arch-v3.md`
