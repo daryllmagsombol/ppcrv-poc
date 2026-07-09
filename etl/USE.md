@@ -101,7 +101,8 @@ Requires a local Postgres instance with a `pprcv_local` database:
 
 ```bash
 createdb pprcv_local
-python3 scripts/load_ref_data.py
+python3 scripts/load_ref_data.py          # skip if already loaded
+python3 scripts/load_ref_data.py --fresh   # force drop + reload
 ```
 
 Loads 4 tables from `sample-csv/`:
@@ -112,7 +113,8 @@ Loads 4 tables from `sample-csv/`:
 | `ref_precincts` | `sample-csv/precincts.csv` | 93,629 |
 | `ref_candidates` | `sample-csv/candidates.csv` | 41,647 |
 
-Idempotent — safe to re-run (uses `DROP TABLE ... CASCADE` then recreate).
+Default (no flag) checks if data already exists — skips if loaded.  
+Use `--fresh` to drop, recreate, and reload from scratch.
 
 Note: Party-list candidates have empty `PARTIES_CODE`, which the script converts to SQL `NULL` to satisfy the foreign key constraint.
 
@@ -137,7 +139,8 @@ python3 -c "from src.etl.processor import parse_and_aggregate; r=parse_and_aggre
 python3 -c "import pyarrow.parquet as pq, glob; [print(f'--- {f} ---') or [print(f'  {c}: {table.column(c).to_pylist()}') for c in (table:=pq.ParquetFile(f).read()).column_names] for f in sorted(glob.glob('output/**/*.parquet', recursive=True))]"
 
 # Load Postgres
-python3 scripts/load_ref_data.py
+python3 scripts/load_ref_data.py          # skip if loaded
+python3 scripts/load_ref_data.py --fresh   # force reload
 
 # Clean
 rm -rf output/

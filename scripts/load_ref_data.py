@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-"""Load reference data CSVs into local pprcv_local Postgres database."""
+"""Load reference data CSVs into local pprcv_local Postgres database.
 
+Usage:
+    python3 scripts/load_ref_data.py         # skip if already loaded
+    python3 scripts/load_ref_data.py --fresh  # drop + reload
+"""
+
+import argparse
 import csv
 from pathlib import Path
 
@@ -9,25 +15,19 @@ import psycopg2
 BASE = Path(__file__).resolve().parent.parent / "sample-csv"
 CONN_STR = "host=localhost dbname=pprcv_local user=daryllmagsombol"
 
-
-SCHEMA_SQL = """
-DROP TABLE IF EXISTS ref_parties CASCADE;
-DROP TABLE IF EXISTS ref_contests CASCADE;
-DROP TABLE IF EXISTS ref_precincts CASCADE;
-DROP TABLE IF EXISTS ref_candidates CASCADE;
-
-CREATE TABLE ref_parties (
+CREATE_SQL = """
+CREATE TABLE IF NOT EXISTS ref_parties (
     parties_code TEXT PRIMARY KEY,
     parties_name TEXT NOT NULL,
     parties_alias TEXT
 );
 
-CREATE TABLE ref_contests (
+CREATE TABLE IF NOT EXISTS ref_contests (
     contest_code TEXT PRIMARY KEY,
     contest_name TEXT NOT NULL
 );
 
-CREATE TABLE ref_precincts (
+CREATE TABLE IF NOT EXISTS ref_precincts (
     acm_id TEXT PRIMARY KEY,
     reg_name TEXT,
     prv_name TEXT,
@@ -38,13 +38,20 @@ CREATE TABLE ref_precincts (
     registered_voters INTEGER
 );
 
-CREATE TABLE ref_candidates (
+CREATE TABLE IF NOT EXISTS ref_candidates (
     contest_code TEXT REFERENCES ref_contests(contest_code),
     candidate_code TEXT NOT NULL,
     candidate_name TEXT NOT NULL,
     parties_code TEXT REFERENCES ref_parties(parties_code),
     PRIMARY KEY (contest_code, candidate_code)
 );
+"""
+
+DROP_SQL = """
+DROP TABLE IF EXISTS ref_candidates CASCADE;
+DROP TABLE IF EXISTS ref_precincts CASCADE;
+DROP TABLE IF EXISTS ref_contests CASCADE;
+DROP TABLE IF EXISTS ref_parties CASCADE;
 """
 
 
@@ -70,12 +77,48 @@ def load_csv_to_table(conn, table: str, csv_path: Path):
     return len(rows)
 
 
-def main():
-    conn = psycopg2.connect(CONN_STR)
+def already_loaded(conn) -> bool:
     with conn.cursor() as cur:
-        cur.execute(SCHEMA_SQL)
-    conn.commit()
-    print("Created tables: ref_parties, ref_contests, ref_precincts, ref_candidates")
+        cur.execute(
+            "SELECT EXISTS (SELECT FROM information_schema.tables "
+            "WHERE table_name = 'ref_parties')"
+        )
+        if not cur.fetchone()[0]:
+            return False
+        cur.execute("SELECT COUNT(*) FROM ref_parties")
+        return cur.fetchone()[0] > 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Load reference data CSVs into Postgres"
+    )
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Drop and recreate all tables before loading",
+    )
+    args = parser.parse_args()
+
+    conn = psycopg2.connect(CONN_STR)
+
+    if args.fresh:
+        with conn.cursor() as cur:
+            cur.execute(DROP_SQL)
+        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(CREATE_SQL)
+        conn.commit()
+        print("Recreated tables (--fresh)")
+    elif already_loaded(conn):
+        conn.close()
+        print("Reference data already loaded (use --fresh to reload)")
+        return
+    else:
+        with conn.cursor() as cur:
+            cur.execute(CREATE_SQL)
+        conn.commit()
+        print("Created tables (first run)")
 
     counts = {
         "ref_parties": load_csv_to_table(conn, "ref_parties", BASE / "parties.csv"),
