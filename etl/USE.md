@@ -52,6 +52,9 @@ python3 -c "from src.etl.processor import parse_and_aggregate; print(parse_and_a
 
 ## 3. Inspect Parquet Output
 
+The Parquet files store per-candidate totals (from the aggregation step).  
+Both commands read the same files — the summary just rolls them up by contest.
+
 ### Quick summary (fast — one pass over all partitions)
 
 ```bash
