@@ -1,6 +1,6 @@
 # PPCRV Re-Architecture v3 — Cost Estimate (Delta)
 
-A cost estimate for the **v3 cloud-agnostic architecture** described in [readme-re-arch-v3.md](readme-re-arch-v3.md). This is a **delta document** — it only covers what changes from the v2 cost model in [cost-re-arch-v2.md](cost-re-arch-v2.md).
+A cost estimate for the **v3 cloud-agnostic architecture** described in [README.md](../README.md). This is a **delta document** — it only covers what changes from the v2 cost model in [cost-re-arch-v2.md](cost-re-arch-v2.md).
 
 > [!IMPORTANT]
 > All prices are in **USD** based on AWS public pricing for **ap-southeast-1** as of **July 2026**. Actual billing will vary. This is a planning estimate, not a quote.
@@ -69,10 +69,11 @@ These services are **new** in v3:
 | Node count | 1 (single node, no cluster mode) |
 | Hourly rate (ap-southeast-1) | ~$0.034/h |
 | Monthly (always-on, 730h) | **~$24.82** |
-| Monthly (auto-shutdown, 168h/month) | ~$5.71 (see [Auto-Shutdown Strategies](#auto-shutdown-strategies)) |
+| Monthly (auto-shutdown, idle months) | **$0** compute + ~$0.50 storage (see [Auto-Shutdown Strategies](#auto-shutdown-strategies)) |
+| Monthly (dev, 168h/month) | ~$5.71 (8h/day × 21 weekdays) |
 
 > [!NOTE]
-> Redis is the **new dominant idle cost** in v3 — $25/month always-on. v2's idle database cost was ~$10 (Aurora 0.5 ACU auto-scaled + DDB storage). The trade-off: Redis handles three workloads (metrics, queue, pub/sub) where v2 needed three separate services (DynamoDB ×2 + Step Functions).
+> Redis is the **new dominant idle cost** in v3 if kept always-on ($25/month). With auto-shutdown, idle months drop to $0 compute. The trade-off: Redis handles three workloads (metrics, queue, pub/sub) where v2 needed three separate services (DynamoDB ×2 + Step Functions).
 
 ---
 
@@ -109,7 +110,7 @@ Cost is identical to v2. The change is operational: v3 commits to using only sta
 | Durable Messaging | SNS + SQS (reduced) | $1.00 |
 | Observability | CloudWatch + X-Ray | $35.00 |
 | Analytics | Athena | $2.00 |
-| AWS Lambda | S3 trigger (free tier) | $0 |
+| AWS Lambda | S3 trigger (500 invocations, well within 1M/month free tier) | $0 |
 | **TOTAL (Optimized Peak)** | | **~$345** |
 
 ### Peak Month Comparison (v1 → v2 → v3)
@@ -140,20 +141,21 @@ v3 is **$45-57/month cheaper at peak** than v1/v2, driven by Redis replacing Dyn
 | Fargate API | $0 | Scales to 0 |
 | Fargate ETL | $0 | No uploads |
 | **Redis (always-on)** | **$24.82** | `cache.t3.small` — the idle-dominant cost |
+| **Redis (auto-shutdown)** | **$0** | Stopped during idle, storage only (~$0.50/mo) |
 | Aurora Serverless v2 | $7.92 | 0.5 ACU × 168h (auto-shutdown schedule, 8h/day × 21 weekdays) |
 | S3 + ECR | $6.00 | Storage |
 | SNS + SQS | $0.25 | Minimal |
 | CloudWatch | $11.00 | Dashboards + alarms + log storage |
-| Lambda Trigger | $0 | Free tier |
+| Lambda Trigger | $0 | Free tier (500 invocations peak is well within 1M/month free tier) |
 | Athena | $0.13 | Minimal |
 | **Total (Aurora auto-shutdown, Redis always-on)** | **~$74** | |
-| **Total (Redis auto-shutdown, Aurora auto-shutdown)** | **~$48** | See [Auto-Shutdown Strategies](#auto-shutdown-strategies) |
+| **Total (Redis auto-shutdown, Aurora auto-shutdown)** | **~$49** | See [Auto-Shutdown Strategies](#auto-shutdown-strategies) |
 
 ### Idle Month Comparison
 
 | Scenario | v1 | v2 | v3 (Redis always-on) | v3 (Redis auto-shutdown) |
 |----------|-----|-----|----------------------|--------------------------|
-| Optimized idle (CF Free, WAF on) | ~$65 | ~$51 | **~$74** | **~$48** |
+| Optimized idle (CF Free, WAF on) | ~$65 | ~$51 | **~$74** | **~$49** |
 
 > [!NOTE]
 > Redis always-on ($25/mo) makes v3 more expensive than v2 at idle. The auto-shutdown strategy brings v3 below v2. This is the cost of consolidating three services into Redis — you pay ~$25/mo for the convenience, or you write the rebuild script and save ~$26/mo.
@@ -187,24 +189,24 @@ v3 is ~$208 more than v2 with Redis always-on. The Redis idle cost ($25/mo × 11
 | Scenario | Annual | Notes |
 |----------|--------|-------|
 | Aurora auto-shutdown + Redis always-on | ~$1,012 | No rebuild script needed |
-| Aurora auto-shutdown + Redis auto-shutdown | **~$873** | Rebuild script required |
+| Aurora auto-shutdown + Redis auto-shutdown | **~$821** | Rebuild script required |
 | Both always-on | ~$1,159 | Simplest, most expensive |
-| Both auto-shutdown (full optimization) | **~$790** | Includes CF plan-switching + all DBs shut down during idle. Aurora: $7.92/mo idle, Redis: $5.71/mo idle |
+| Both auto-shutdown (full optimization) | **~$883** | Includes CF plan-switching + all DBs shut down during idle. Aurora: $7.92/mo idle, Redis: $0/mo idle |
 
 **Math (full optimization — both auto-shutdown):**
 - Peak: $345
-- Idle: $48.40 × 11 = $532.40
+- Idle: $42.69 × 11 = $469.59
   - CF Free + WAF: $5
   - ALB: $18.40
   - Aurora (auto-shutdown): $7.92
-  - Redis (auto-shutdown): $5.71 (168h/month × $0.034/h)
+  - Redis (auto-shutdown): $0 (stopped, storage only ~$0.50)
   - Everything else: ~$11.37
-- Total: $345 + $532.40 = **~$877**
+- Total: $345 + $469.59 = **~$815**
 - Add rebuild costs: $0.50 × 12 (monthly + election restart) = $6
-- **Annual: ~$883**
+- **Annual: ~$821**
 
 > [!NOTE]
-> **Counterintuitive finding:** With full auto-shutdown, v3 is **~$68/year cheaper than v2** ($883 vs $951). The Redis rebuild script is the price: ~$68/year savings for an extra ~100 lines of code. Without auto-shutdown, v3 is ~$208/year more expensive than v2 — the Redis always-on idle cost dominates.
+> **Counterintuitive finding:** With full auto-shutdown, v3 is **~$130/year cheaper than v2** ($821 vs $951). The Redis rebuild script is the price: ~$130/year savings for an extra ~100 lines of code. Without auto-shutdown, v3 is ~$208/year more expensive than v2 — the Redis always-on idle cost dominates.
 
 ---
 
@@ -233,10 +235,13 @@ Pro: Zero operational complexity. Con: Most expensive option.
 |--------|------|
 | Stop Redis during idle months | $0 compute, minimal storage |
 | Restart before election + rebuild from S3 | ~$0.50/rebuild (Athena query) |
-| Monthly idle cost (168h × $0.034) | **~$5.71** |
-| Annual idle cost (11 months) | **~$63** |
+| Monthly idle cost (stopped) | **$0** (compute) |
+| Annual rebuild cost (12 restarts) | **~$6** |
 
-Pro: Saves **~$212/year**. Con: Requires rebuild script, 5-minute cold start on restart.
+Pro: Saves **~$269/year** vs always-on. Con: Requires rebuild script, 5-minute cold start on restart.
+
+> [!NOTE]
+> During idle months, Redis is **completely stopped** — $0 compute cost. The 168h/month figure in the Aurora section is for Aurora's built-in auto-scaling (it can't scale to zero). Redis is manually stopped/started, so idle months have zero compute cost. The only ongoing cost is minimal storage for ElastiCache snapshots (~$0.50/month).
 
 **Implementation:**
 ```
@@ -282,7 +287,7 @@ v3 dev is more expensive than v1/v2 due to Redis always-on in dev ($12/mo for `c
 | **Peak month (Business plan)** | ~$402 | ~$390 | **~$345** |
 | **Idle month (optimized, auto-shutdown)** | ~$65 | ~$51 | **~$48** |
 | **Idle month (optimized, Redis always-on)** | — | — | ~$74 |
-| **Annual (optimized, full auto-shutdown)** | ~$1,117 | ~$951 | **~$883** |
+| **Annual (optimized, full auto-shutdown)** | ~$1,117 | ~$951 | **~$821** |
 | **Annual (optimized, Aurora-only auto-shutdown)** | — | — | ~$1,012 |
 | **Annual (always-on)** | ~$1,117 | ~$1,171 | ~$1,159 |
 | **Dev environment / month** | ~$29 | ~$42 | ~$51 |
@@ -352,7 +357,11 @@ GCP Redis (Memorystore Basic) is ~$10/mo more expensive than AWS ElastiCache. Cl
 Azure Redis pricing is tiered. C0 (250 MB) might be too small for 32M rows of metrics; C1 (1 GB) is ~$50/mo — roughly double AWS's `cache.t3.small`.
 
 > [!IMPORTANT]
-> GCP and Azure Redis pricing is preliminary and based on list prices (July 2026). Verify with cloud pricing calculators. AWS tends to be cheapest for managed services in Southeast Asia.
+> **GCP and Azure pricing is preliminary** — based on list prices (July 2026), not actual billing. These estimates need verification with cloud pricing calculators before making migration decisions. AWS tends to be cheapest for managed services in Southeast Asia. Key differences:
+> - GCP Redis (Memorystore) has no `t3.micro` equivalent — minimum is M1 (~$35/mo)
+> - Azure Redis C0 (250 MB) may be too small for 32M rows of metrics
+> - Cloud SQL doesn't auto-scale to zero like Aurora — you pay for a minimum instance 24/7
+> - Azure Postgres Basic tier is ~$25/mo minimum vs Aurora's ~$8/mo with auto-shutdown
 
 ---
 

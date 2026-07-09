@@ -27,6 +27,46 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-08 — Reviewed and improved v3 architecture docs
+
+**Files changed:** `README.md`, `docs/cost-re-arch-v3.md`
+**Author:** Daryll (Claude)
+**Summary:** Reviewed the v3 architecture docs for gaps in Redis operational guidance, cost calculation errors, and missing request flows. Added comprehensive Redis security, monitoring, and operational sections. Fixed annual projection math discrepancy and broken links.
+
+### What changed
+
+**Cost doc fixes (cost-re-arch-v3.md):**
+- Fixed broken link: `readme-re-arch-v3.md` → `../README.md` (v3 architecture is now in README.md)
+- Fixed annual projection math discrepancy: ~$790 was incorrect, corrected to ~$821 based on detailed breakdown
+- Clarified Redis auto-shutdown idle cost: $0/month (stopped), not $5.71/month (that's dev environment cost)
+- Updated all dependent calculations (idle month: ~$49, annual: ~$821, comparison: $130/year cheaper than v2)
+- Added per-cloud Redis cost disclaimer: GCP/Azure pricing is preliminary, needs verification with cloud calculators
+- Added Lambda Trigger free tier clarification: 500 peak invocations is well within 1M/month free tier
+
+**README.md — New Redis operational sections:**
+- **Redis Memory Sizing:** Calculated ~60 MB needed for 95K precincts, 1.37 GB instance = 23x headroom
+- **Redis Security:** AUTH token, TLS in-transit, VPC security groups, encryption at rest, IAM auth option
+- **Redis Connection Management:** Connection count (20 = fine), timeout config, retry strategy, health checks
+- **Data Consistency Model:** Write order (S3 first, then Redis), failure scenarios and recovery paths
+- **ETL Watchdog Detail:** Check frequency (60s), stale timeout (10 min), retry logic (3 attempts), permanent failure handling
+- **Redis Pub/Sub Reliability Caveat:** Fire-and-forget caveat, mitigation via reconciliation job (hourly) and startup refresh
+- **Redis Key TTL Strategy:** Table of all key patterns with TTL rationale (election data = no TTL, temporary keys = TTL)
+- **Redis Monitoring Metrics:** CloudWatch metrics to monitor (memory, connections, hit rate, CPU, evictions) with alarm thresholds
+- **RDB Snapshot Storage Clarification:** ElastiCache manages storage automatically, no S3 bucket needed, restore procedure
+- **ETL Scaling Strategy:** Manual scaling for MVP, auto-scaling option via CloudWatch alarm on queue depth
+
+**README.md — New request flow:**
+- **Flow 5 — Reconciliation:** Added sequence diagram showing CloudWatch Scheduled → Athena → S3 Parquet vs Redis → SNS alert/rebuild
+
+### Why
+- User requested review of v3 docs for gaps and improvements
+- Redis is a new service in v3 — the docs lacked operational guidance for security, monitoring, and failure handling
+- The annual projection had a math discrepancy (~$790 vs ~$883) that needed correction
+- The reconciliation flow (Flow 5) was in v1/v2 but missing from v3
+- Redis auto-shutdown cost was incorrectly stated as $5.71/month (that's dev cost, not idle cost)
+
+---
+
 ## 2026-07-08 — Created v3 cloud-agnostic architecture (Redis-based)
 
 **Files changed:** `readme-re-arch-v3.md` (new), `cost-re-arch-v3.md` (new)

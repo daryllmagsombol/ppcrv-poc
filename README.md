@@ -378,6 +378,33 @@ sequenceDiagram
     API->>API: Invalidate cache for precinct 123
 ```
 
+### Flow 5 — Reconciliation (Automated)
+
+```mermaid
+sequenceDiagram
+    participant CW as CloudWatch (Scheduled)
+    participant Athena as Amazon Athena
+    participant S3P as S3 Parquet
+    participant Redis as Redis
+    participant SNS as SNS
+
+    CW->>Athena: Trigger reconciliation query
+    Athena->>S3P: SELECT precinct, candidate, SUM(votes) GROUP BY ...
+    S3P-->>Athena: Return raw totals from Parquet
+    Athena->>Redis: GET PRECINCT:* / ZRANGE CONTEST:*
+    Redis-->>Athena: Return aggregated metrics
+    Athena->>Athena: Compare raw sum vs Redis sum
+    alt Totals match
+        Athena-->>CW: OK — Data consistent
+    else Mismatch detected
+        Athena->>SNS: Publish MISMATCH alert
+        SNS->>SNS: Trigger Redis rebuild (auto-remediation)
+        Note over SNS: Engineering team notified
+    end
+```
+
+**Schedule:** Hourly during election week, daily during idle months. Reconciliation also runs on Redis startup after auto-shutdown.
+
 ---
 
 ## Data Accuracy & Integrity
@@ -723,7 +750,182 @@ Redis supports periodic disk snapshots (RDB). This reduces rebuild time after re
 
 **Recommendation:** Enable RDB snapshots every 15 minutes during election week. Disable during idle (no writes). The rebuild script becomes a safety net, not the primary recovery path.
 
-**Storage cost:** RDB snapshot file (~25MB) stored in S3 → ~$0.50/month.
+**Storage:** ElastiCache manages RDB snapshot storage automatically — no S3 bucket needed. Snapshot files (~25MB) are stored in ElastiCache's managed storage. To restore: create a new ElastiCache cluster from the snapshot via AWS Console or `aws elasticache create-cache-cluster --snapshot-name`.
+
+### Redis Memory Sizing
+
+The `cache.t3.small` (1.37 GB) instance is sized for the election workload:
+
+| Data | Calculation | Memory |
+|------|-------------|--------|
+| Precinct metrics | 95,000 precincts × ~500 bytes/JSON | ~47.5 MB |
+| Contest aggregates | ~50 contests × 20 candidates × 100 bytes | ~100 KB |
+| Election metadata | ~10 keys × ~1 KB | ~10 KB |
+| ETL queue/processing | ~500 entries × 200 bytes | ~100 KB |
+| Redis overhead | ~20% for internal structures | ~10 MB |
+| **Total** | | **~60 MB** |
+
+**Headroom:** 1.37 GB ÷ 60 MB = **23x headroom**. The instance is oversized for safety. Can downsize to `cache.t3.micro` (0.5 GB, ~$12/mo) for dev or if cost is a concern.
+
+### Redis Security
+
+| Concern | Configuration |
+|---------|---------------|
+| **AUTH** | Enable Redis AUTH token (password). Store in SSM Parameter Store, inject via ECS task definition `secrets`. |
+| **TLS** | Enable in-transit encryption (ElastiCache supports TLS). All Redis clients connect via `rediss://` (port 6380). |
+| **VPC** | Deploy Redis in private subnets. Security group allows inbound 6380 only from Fargate task security group. |
+| **Encryption at rest** | Enable ElastiCache at-rest encryption. RDB snapshots are encrypted. |
+| **IAM auth** | ElastiCache supports IAM authentication (Redis 6.0+). Alternative to AUTH token — uses Sigv4 signing. |
+
+**Minimum for production:** AUTH + TLS + VPC security group. Encryption at rest is a bonus.
+
+### Redis Connection Management
+
+With 20 Fargate tasks each opening a Redis connection:
+
+| Concern | Solution |
+|---------|----------|
+| **Connection count** | 20 tasks × 1 connection = 20 connections. Redis handles 10K+ connections. No pooling needed. |
+| **Connection timeout** | Set `socket_timeout=5s` and `socket_connect_timeout=2s`. Prevents hanging on Redis unavailability. |
+| **Retry strategy** | Use `redis.retry_on_timeout=True`. Retry once on timeout, then fail fast. |
+| **Connection health** | Use `redis.ping()` on startup to verify connectivity. Log connection errors to CloudWatch. |
+
+**Code pattern:**
+```python
+import redis
+import os
+
+redis_client = redis.Redis(
+    host=os.environ['REDIS_HOST'],
+    port=6380,
+    password=os.environ['REDIS_AUTH_TOKEN'],
+    ssl=True,
+    socket_timeout=5,
+    socket_connect_timeout=2,
+    retry_on_timeout=True,
+    decode_responses=True
+)
+```
+
+### Data Consistency Model
+
+Every metric write to Redis is also persisted in S3 Parquet. The write order is:
+
+```
+1. Write to S3 Parquet (source of truth)  ← durable first
+2. Write to Redis (fast path)             ← then cache
+```
+
+**Failure scenarios:**
+
+| Scenario | Impact | Recovery |
+|----------|--------|----------|
+| S3 write succeeds, Redis write fails | Data is durable in S3, but not in Redis | Reconciliation job detects gap → rebuilds Redis |
+| Redis write succeeds, S3 write fails | Data is in Redis but not durable | Next ETL job overwrites Redis; S3 write retries with idempotent upsert |
+| Both fail | Data is lost | ETL job retries (3 attempts); permanent failure → SNS alert |
+
+**Guarantee:** S3 Parquet is always the source of truth. Redis is a cache that can be rebuilt. The worst case is a 5-minute delay while Redis is rebuilt from S3.
+
+### ETL Watchdog Detail
+
+The watchdog monitors `etl:processing` for stale entries:
+
+| Parameter | Value |
+|-----------|-------|
+| **Check frequency** | Every 60 seconds |
+| **Stale timeout** | 10 minutes (configurable via `ETL_STALE_TIMEOUT_SEC`) |
+| **Action** | Move stale entry from `etl:processing` back to `etl:queue` for retry |
+| **Max retries** | 3 (tracked in `etl:retries:{file_key}`) |
+| **Permanent failure** | After 3 retries, move to `etl:failed` → SNS alert |
+
+**Implementation:**
+```python
+import time
+import redis
+
+def watchdog_loop():
+    while True:
+        stale_jobs = redis.lrange("etl:processing", 0, -1)
+        for job in stale_jobs:
+            job_data = json.loads(job)
+            started_at = job_data.get("started_at", 0)
+            if time.time() - started_at > ETL_STALE_TIMEOUT_SEC:
+                retries = redis.incr(f"etl:retries:{job_data['file_key']}")
+                redis.lrem("etl:processing", 1, job)
+                if retries <= 3:
+                    redis.lpush("etl:queue", job)  # Re-queue
+                else:
+                    redis.lpush("etl:failed", job)  # Permanent failure
+                    publish_alert(f"ETL permanent failure: {job_data['file_key']}")
+        time.sleep(60)
+```
+
+### Redis Pub/Sub Reliability Caveat
+
+Redis pub/sub is **fire-and-forget**. If the API container is down when `etl:done` is published, it misses the cache invalidation event.
+
+**Mitigations:**
+
+| Layer | Mechanism |
+|-------|-----------|
+| **Real-time** | API container subscribes to `etl:done` on startup. Invalidates cache immediately. |
+| **Safety net** | Reconciliation job runs hourly. Compares Redis metrics vs S3 Parquet. Catches any missed invalidations. |
+| **Startup** | API container performs a full cache refresh on startup (queries S3 Parquet via Athena). |
+
+**Trade-off accepted:** 99% of the time, pub/sub works. The 1% case (container restart during ETL) is caught by reconciliation within 1 hour. For an election system, this is acceptable because results are already "partial" until all precincts report.
+
+### Redis Key TTL Strategy
+
+| Key Pattern | TTL | Rationale |
+|-------------|-----|-----------|
+| `PRECINCT:*` | **None** | Election data — permanent until next election |
+| `CONTEST:*` | **None** | Election data — permanent until next election |
+| `ELECTION:*` | **None** | Election data — permanent until next election |
+| `STATUS:*` | **None** | Precinct processing status — permanent for audit |
+| `REBUILD:*` | **None** | Rebuild state — permanent for operational history |
+| `etl:queue` | **None** | Pending jobs — must survive restarts |
+| `etl:processing` | **None** | Active jobs — watchdog monitors for stale entries |
+| `etl:failed` | **None** | Failed jobs — permanent for debugging |
+| `etl:retries:*` | **24 hours** | Retry counters — reset daily |
+| `ratelimit:*` | **60 seconds** | Rate limit windows — auto-expire |
+
+### Redis Monitoring Metrics
+
+Monitor these CloudWatch metrics for ElastiCache:
+
+| Metric | Threshold | Action |
+|--------|-----------|--------|
+| `DatabaseMemoryUsagePercentage` | > 70% | Alert — consider upsizing |
+| `CurrConnections` | > 100 | Investigate connection leaks |
+| `CacheHitRate` | < 80% | Investigate cache invalidation frequency |
+| `EngineCPUUtilization` | > 60% | Consider Multi-AZ or larger instance |
+| `ReplicationLag` | > 1 second | (Multi-AZ only) Check replica health |
+| `Evictions` | > 0 | Memory pressure — upsize or add TTLs |
+| `NetworkBytesIn/Out` | Baseline | Track traffic patterns |
+
+**Alarms to set:**
+- `DatabaseMemoryUsagePercentage > 70%` for 5 minutes → SNS alert
+- `EngineCPUUtilization > 60%` for 5 minutes → SNS alert
+- `CurrConnections > 100` for 5 minutes → SNS alert
+
+### ETL Scaling Strategy
+
+| Parameter | Value |
+|-----------|-------|
+| **Scaling trigger** | Manual or Redis queue depth |
+| **Scale-out command** | `aws ecs update-service --desired-count N` |
+| **Max workers** | 20 (limited by Redis connection count and S3 request rate) |
+| **Scale-down** | Workers exit when queue is empty for 5 minutes (`BRPOP` timeout) |
+
+**Auto-scaling option (future):**
+```python
+# CloudWatch alarm on Redis queue depth
+# etl:queue length > 10 for 2 minutes → scale ECS to 10
+# etl:queue length > 50 for 2 minutes → scale ECS to 20
+# etl:queue == 0 for 5 minutes → scale ECS to 0
+```
+
+**Recommendation:** Start with manual scaling for the first election. Implement auto-scaling after observing real queue behavior.
 
 ### API Rate Limiting (WAF + Redis)
 
