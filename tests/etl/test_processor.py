@@ -6,7 +6,6 @@ from src.etl.processor import parse_and_aggregate
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
-REAL_DATA = Path(__file__).resolve().parent.parent.parent / "sample-csv"
 
 
 def test_simple_aggregation(tmp_path: Path):
@@ -88,12 +87,15 @@ def test_idempotent_output(tmp_path: Path):
 
 
 def test_real_results_csv(tmp_path: Path):
+    """Real-data sample: 4 rows, same precinct/contest, 4 candidates.
+    Expected: SUM=242+234+217+190=883, 1 precinct, 1 contest.
+    """
     result = parse_and_aggregate(
-        csv_path=REAL_DATA / "results.csv",
+        csv_path=FIXTURES / "real-sample.csv",
         output_dir=tmp_path,
     )
 
-    assert result.total_votes == 0
+    assert result.total_votes == 883
     assert result.precinct_count == 1
     assert result.contest_count == 1
     # Use >= 1 to tolerate DuckDB splitting a partition into multiple files

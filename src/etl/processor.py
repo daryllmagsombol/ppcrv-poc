@@ -28,13 +28,13 @@ def parse_and_aggregate(
             SELECT
                 precinct_code,
                 contest_code,
-                candidate_code,
+                candidate_name,
                 party_code,
                 SUM(CAST(votes_amount AS INTEGER)) AS total_votes,
-                SUM(CAST(overvote AS INTEGER)) AS total_overvote,
-                SUM(CAST(undervote AS INTEGER)) AS total_undervote
+                SUM(CAST(over_votes AS INTEGER)) AS total_over_votes,
+                SUM(CAST(under_votes AS INTEGER)) AS total_under_votes
             FROM csv_data
-            GROUP BY precinct_code, contest_code, candidate_code, party_code
+            GROUP BY precinct_code, contest_code, candidate_name, party_code
             ORDER BY precinct_code, contest_code, total_votes DESC
             """
         ).fetchall()
@@ -65,13 +65,13 @@ def parse_and_aggregate(
                 f"COPY ("
                 f"SELECT precinct_code::VARCHAR AS precinct_code, "
                 f"contest_code::VARCHAR AS contest_code, "
-                f"candidate_code::VARCHAR AS candidate_code, "
+                f"candidate_name::VARCHAR AS candidate_name, "
                 f"party_code::VARCHAR AS party_code, "
                 f"SUM(CAST(votes_amount AS INTEGER)) AS total_votes, "
-                f"SUM(CAST(overvote AS INTEGER)) AS total_overvote, "
-                f"SUM(CAST(undervote AS INTEGER)) AS total_undervote "
+                f"SUM(CAST(over_votes AS INTEGER)) AS total_over_votes, "
+                f"SUM(CAST(under_votes AS INTEGER)) AS total_under_votes "
                 f"FROM csv_data WHERE {partition_by} = ? "
-                f"GROUP BY precinct_code, contest_code, candidate_code, party_code"
+                f"GROUP BY precinct_code, contest_code, candidate_name, party_code"
                 f") TO '{out_path}' (FORMAT PARQUET)",
                 [val],
             )

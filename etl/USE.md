@@ -24,7 +24,7 @@ pytest tests/etl/ -v
 | `test_empty_csv` | Header-only → zero counts, no output files |
 | `test_output_is_valid_parquet` | Parquet files readable with correct columns |
 | `test_idempotent_output` | Same input → byte-identical output |
-| `test_real_results_csv` | Real `sample-csv/results.csv` (all zeros → SUM=0) |
+| `test_real_results_csv` | Real-data sample (4 rows, 4 candidates → SUM=883, 1 precinct) |
 
 ---
 
@@ -65,17 +65,17 @@ for f in sorted(glob.glob('output/**/*.parquet', recursive=True)):
 
 Example output:
 ```
---- output/contest_code=1199000/data.parquet ---
-  precinct_code: ['1010017', '1010017', '1010017']
-  contest_code: ['1199000', '1199000', '1199000']
-  candidate_code: ['9900110002', '9900110001', '9900110003']
-  party_code: ['9900110002', '9900110001', '9900110003']
-  total_votes: [0.0, 0.0, 0.0]
-  total_overvote: [0.0, 0.0, 0.0]
-  total_undervote: [0.0, 0.0, 0.0]
+--- output/contest_code=1010010/data.parquet ---
+  precinct_code: ['10010001', '10010001', '10010001', '10010001']
+  contest_code: ['1010010', '1010010', '1010010', '1010010']
+  candidate_name: ['ANDAL, GLENN (LAKAS)', 'BALBA, JAY JAY (LAKAS)', 'CACAO, VIONG (NPC)', 'CARINGAL, KIDLAT (NPC)']
+  party_code: ['28', '28', '34', '34']
+  total_votes: [242.0, 234.0, 217.0, 190.0]
+  total_over_votes: [16.0, 16.0, 16.0, 16.0]
+  total_under_votes: [748.0, 748.0, 748.0, 748.0]
 ```
 
-> **Note:** Uses `ParquetFile().read()` + `to_pylist()` instead of `read_table()` + `to_pandas()` to avoid DuckDB dictionary encoding and missing pandas module issues.
+> **Note:** Uses `ParquetFile().read()` + `to_pylist()` instead of `read_table()` + `to_pandas()` to avoid DuckDB dictionary encoding and missing pandas issues.
 
 ---
 
