@@ -1,8 +1,8 @@
 .commandcode/
 .pytest_cache/
 output/
-output.txt
 sample-csv/results.csv
+output.txt
 
 # Node / Turborepo
 node_modules/
