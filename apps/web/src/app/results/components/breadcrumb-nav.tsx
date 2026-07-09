@@ -5,11 +5,11 @@ interface BreadcrumbNavProps {
 export function BreadcrumbNav({ filters }: BreadcrumbNavProps) {
   const crumbs: string[] = [];
 
-  if (filters.reg) crumbs.push(filters.reg);
-  if (filters.prv) crumbs.push(filters.prv);
-  if (filters.mun) crumbs.push(filters.mun);
-  if (filters.brgy) crumbs.push(filters.brgy);
-  if (filters.vc) crumbs.push(filters.vc);
+  if (filters.region) crumbs.push(filters.region);
+  if (filters.province) crumbs.push(filters.province);
+  if (filters.municipality) crumbs.push(filters.municipality);
+  if (filters.barangay) crumbs.push(filters.barangay);
+  if (filters.votingCenter) crumbs.push(filters.votingCenter);
 
   if (crumbs.length === 0) crumbs.push('National');
 
