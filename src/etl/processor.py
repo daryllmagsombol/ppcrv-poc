@@ -7,6 +7,11 @@ import duckdb
 from src.etl.models import AggregationResult
 
 
+def _collect_parquet_files(root: Path) -> list[str]:
+    """Return sorted list of Parquet files under *root* (recursive glob)."""
+    return sorted(str(p) for p in root.rglob("*.parquet"))
+
+
 def parse_and_aggregate(
     csv_path: str | Path,
     output_dir: str | Path,
@@ -18,13 +23,13 @@ def parse_and_aggregate(
 
     con = duckdb.connect()
     try:
-        # Materialize CSV once — avoids re-scanning the file per partition
+        # 1. Load CSV once into a materialised table
         con.execute(
             f"CREATE TABLE raw_data AS "
             f"SELECT * FROM read_csv_auto('{csv_path_str}')"
         )
 
-        # Aggregate once into a temporary table, lowercase columns for Parquet compat
+        # 2. Aggregate once — after this, raw data is no longer needed
         con.execute(
             "CREATE TABLE agg_data AS "
             "SELECT "
@@ -39,46 +44,33 @@ def parse_and_aggregate(
             "GROUP BY precinct_code, contest_code, candidate_name, party_code"
         )
 
-        rows = con.execute(
-            "SELECT * FROM agg_data "
-            "ORDER BY precinct_code, contest_code, total_votes DESC"
-        ).fetchall()
+        # 3. Collect summary totals from the aggregated table
+        stats = con.execute(
+            "SELECT "
+            "COUNT(DISTINCT precinct_code) AS precinct_count, "
+            "COUNT(DISTINCT contest_code) AS contest_count, "
+            "COALESCE(SUM(total_votes), 0) AS total_votes "
+            "FROM agg_data"
+        ).fetchone()
 
-        if not rows:
+        # Graceful empty-data path (header-only CSV, etc.)
+        if stats[0] == 0:
             return AggregationResult()
 
-        precincts = set()
-        contests = set()
-        total_votes_count = 0
+        # 4. Single-pass partitioned Parquet write — DuckDB handles the loop
+        con.execute(
+            f"COPY agg_data TO '{output_dir}' "
+            f"(FORMAT PARQUET, PARTITION_BY {partition_by})"
+        )
 
-        for row in rows:
-            precincts.add(row[0])
-            contests.add(row[1])
-            total_votes_count += row[4]
-
-        # Derive partition values from the aggregated table
-        distinct_values = con.execute(
-            f"SELECT DISTINCT {partition_by} FROM agg_data ORDER BY 1"
-        ).fetchall()
-        distinct_values = [r[0] for r in distinct_values]
-
-        output_files = []
-        for val in distinct_values:
-            out_path = output_dir / f"{partition_by}={val}" / "data.parquet"
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            con.execute(
-                f"COPY ("
-                f"SELECT * FROM agg_data WHERE {partition_by} = ?"
-                f") TO '{out_path}' (FORMAT PARQUET)",
-                [val],
-            )
-            output_files.append(str(out_path))
+        # 5. Collect what was written
+        output_files = _collect_parquet_files(output_dir)
 
         return AggregationResult(
-            total_votes=total_votes_count,
-            precinct_count=len(precincts),
-            contest_count=len(contests),
-            output_files=sorted(output_files),
+            total_votes=stats[2],
+            precinct_count=stats[0],
+            contest_count=stats[1],
+            output_files=output_files,
         )
     finally:
         con.close()

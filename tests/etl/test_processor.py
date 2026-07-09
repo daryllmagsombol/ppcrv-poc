@@ -58,8 +58,9 @@ def test_output_is_valid_parquet(tmp_path: Path):
         assert table.num_rows > 0
         column_names = table.column_names
         assert "precinct_code" in column_names
-        assert "contest_code" in column_names
         assert "total_votes" in column_names
+        # contest_code is the partition column — stored in the directory name,
+        # not inside the Parquet file (DuckDB PARTITION_BY strips it)
 
 
 def test_idempotent_output(tmp_path: Path):
