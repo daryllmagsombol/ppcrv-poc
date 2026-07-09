@@ -150,26 +150,62 @@ Region (reg_name) → Province (prv_name) → Municipality (mun_name) → Barang
 
 ### NestJS Backend (apps/api/src/modules/)
 
+Following NestJS best practices:
+- **Feature modules** (not technical layers)
+- **Repository pattern** for database abstraction
+- **Constructor injection** (not property injection)
+- **Exception filters** for centralized error handling
+- **DTOs with class-validator** for input validation
+- **Interceptors** for cross-cutting concerns
+
 ```
 modules/
 ├── elections/
+│   ├── dto/
+│   │   ├── create-election.dto.ts
+│   │   └── election-response.dto.ts
 │   ├── elections.controller.ts
 │   ├── elections.service.ts
-│   └── elections.module.ts
+│   ├── elections.repository.ts
+│   ├── elections.module.ts
+│   └── __tests__/
+│       ├── elections.service.spec.ts
+│       └── elections.controller.spec.ts
 ├── results/
+│   ├── dto/
+│   │   ├── result-query.dto.ts
+│   │   └── region-results.dto.ts
 │   ├── results.controller.ts
 │   ├── results.service.ts
 │   ├── results.repository.ts
-│   └── results.module.ts
+│   ├── results.module.ts
+│   └── __tests__/
 ├── upload/
+│   ├── dto/
+│   │   ├── upload-csv.dto.ts
+│   │   └── upload-status.dto.ts
 │   ├── upload.controller.ts
 │   ├── upload.service.ts
 │   ├── csv-parser.service.ts
-│   └── upload.module.ts
+│   ├── upload.repository.ts
+│   ├── upload.module.ts
+│   └── __tests__/
 ├── snapshots/
+│   ├── dto/
 │   ├── snapshots.controller.ts
 │   ├── snapshots.service.ts
-│   └── snapshots.module.ts
+│   ├── snapshots.repository.ts
+│   ├── snapshots.module.ts
+│   └── __tests__/
+├── common/
+│   ├── filters/
+│   │   └── http-exception.filter.ts
+│   ├── interceptors/
+│   │   └── transform.interceptor.ts
+│   ├── pipes/
+│   │   └── validation.pipe.ts
+│   └── guards/
+│       └── (future: auth guards)
 └── anomalies/          # Future: anomaly detection
     └── anomalies.module.ts
 ```
@@ -521,7 +557,276 @@ Every authenticated result displays PPCRV's certification stamp:
 
 ---
 
-## 9. Technical Decisions Summary
+## 9. NestJS Best Practices Implementation
+
+### Architecture Rules
+
+**arch-feature-modules**: Each module (elections, results, upload, snapshots) is self-contained with its own controller, service, repository, DTOs, and tests.
+
+**arch-use-repository-pattern**: Database logic abstracted in repository classes for testability:
+```typescript
+// results.repository.ts
+@Injectable()
+export class ResultsRepository {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async findRegionalOverview(electionId: string, snapshotId: string) {
+    return this.prisma.precinctResult.groupBy({
+      by: ['acmId'],
+      where: { snapshotId },
+      _sum: { totalVotesCast: true }
+    });
+  }
+}
+```
+
+**arch-single-responsibility**: Services focused on one concern:
+- `ResultsService` - Aggregates and formats results
+- `UploadService` - Handles CSV parsing and validation
+- `SnapshotsService` - Manages snapshot lifecycle
+
+### Dependency Injection Rules
+
+**di-prefer-constructor-injection**: All dependencies injected via constructor:
+```typescript
+@Injectable()
+export class ResultsService {
+  constructor(
+    private readonly resultsRepository: ResultsRepository,
+    private readonly prisma: PrismaService,
+  ) {}
+}
+```
+
+**di-interface-segregation**: Use injection tokens for interfaces:
+```typescript
+export const RESULTS_REPOSITORY = 'RESULTS_REPOSITORY';
+
+@Module({
+  providers: [
+    { provide: RESULTS_REPOSITORY, useClass: ResultsRepository },
+  ],
+})
+export class ResultsModule {}
+```
+
+### Error Handling Rules
+
+**error-use-exception-filters**: Global exception filter for consistent error responses:
+```typescript
+@Catch(HttpException)
+export class HttpExceptionFilter implements ExceptionFilter {
+  catch(exception: HttpException, host: ArgumentsHost) {
+    const ctx = host.switchToHttp();
+    const response = ctx.getResponse<Response>();
+    const status = exception.getStatus();
+    const exceptionResponse = exception.getResponse();
+
+    response.status(status).json({
+      statusCode: status,
+      message: typeof exceptionResponse === 'string' 
+        ? exceptionResponse 
+        : (exceptionResponse as any).message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+```
+
+**error-throw-http-exceptions**: Use NestJS HTTP exceptions:
+```typescript
+// Good
+throw new NotFoundException(`Election ${id} not found`);
+throw new BadRequestException('Invalid CSV format');
+
+// Bad
+throw new Error('Not found');
+```
+
+### Security Rules
+
+**security-validate-all-input**: DTOs with class-validator:
+```typescript
+export class UploadCsvDto {
+  @IsNotEmpty()
+  @IsString()
+  electionId: string;
+
+  @IsNotEmpty()
+  @IsString()
+  snapshotName: string;
+}
+
+export class ResultQueryDto {
+  @IsOptional()
+  @IsString()
+  snapshotId?: string;
+
+  @IsOptional()
+  @IsString()
+  contestCode?: string;
+}
+```
+
+**security-rate-limiting**: Rate limiting on upload endpoint:
+```typescript
+@Controller('upload')
+@UseInterceptors(ThrottleInterceptor)
+export class UploadController {
+  @Post('csv')
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 uploads per minute
+  async uploadCsv(@Body() dto: UploadCsvDto, @UploadedFile() file: Express.Multer.File) {
+    // ...
+  }
+}
+```
+
+### Performance Rules
+
+**perf-optimize-database**: Avoid N+1 queries with includes:
+```typescript
+// Good - single query with relations
+async findRegionalOverview(electionId: string) {
+  return this.prisma.precinctResult.findMany({
+    where: { snapshot: { electionId } },
+    include: {
+      votes: {
+        include: { candidate: true }
+      },
+      precinct: true
+    }
+  });
+}
+
+// Bad - N+1 queries
+async findRegionalOverview(electionId: string) {
+  const results = await this.prisma.precinctResult.findMany();
+  for (const result of results) {
+    result.votes = await this.prisma.vote.findMany({ where: { precinctResultId: result.id } });
+  }
+}
+```
+
+**perf-use-caching**: Cache reference data:
+```typescript
+@Injectable()
+export class ResultsService {
+  constructor(
+    private readonly cacheManager: Cache,
+    private readonly resultsRepository: ResultsRepository,
+  ) {}
+
+  async getRegionalOverview(electionId: string) {
+    const cacheKey = `results:overview:${electionId}`;
+    const cached = await this.cacheManager.get(cacheKey);
+    if (cached) return cached;
+
+    const results = await this.resultsRepository.findRegionalOverview(electionId);
+    await this.cacheManager.set(cacheKey, results, 300); // 5 min TTL
+    return results;
+  }
+}
+```
+
+### Database Rules
+
+**db-use-transactions**: Transaction support for CSV upload:
+```typescript
+async processCsvUpload(file: Express.Multer.File, dto: UploadCsvDto) {
+  return this.prisma.$transaction(async (prisma) => {
+    const snapshot = await prisma.snapshot.create({
+      data: { name: dto.snapshotName, electionId: dto.electionId, status: 'processing' }
+    });
+
+    const rows = await this.csvParser.parse(file);
+    const validated = await this.csvParser.validate(rows);
+
+    for (const chunk of chunkArray(validated, 1000)) {
+      await this.insertChunk(chunk, snapshot.id, prisma);
+    }
+
+    return prisma.snapshot.update({
+      where: { id: snapshot.id },
+      data: { status: 'completed', records: validated.length }
+    });
+  });
+}
+```
+
+**db-use-migrations**: Use Prisma migrations for schema changes:
+```bash
+npx prisma migrate dev --name add-election-tables
+npx prisma migrate deploy
+```
+
+### API Design Rules
+
+**api-use-dto-serialization**: DTOs for request/response:
+```typescript
+export class RegionResultsDto {
+  @Expose()
+  name: string;
+
+  @Expose()
+  totalVoters: number;
+
+  @Expose()
+  totalVotesCast: number;
+
+  @Expose()
+  turnout: number;
+
+  @Expose()
+  candidates: CandidateResultDto[];
+}
+```
+
+**api-use-interceptors**: Transform interceptor for consistent response format:
+```typescript
+@Injectable()
+export class TransformInterceptor<T> implements NestInterceptor<T, Response<T>> {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<Response<T>> {
+    return next.handle().pipe(
+      map(data => ({
+        data,
+        timestamp: new Date().toISOString(),
+      })),
+    );
+  }
+}
+```
+
+### Testing Rules
+
+**test-use-testing-module**: Use NestJS testing utilities:
+```typescript
+describe('ResultsService', () => {
+  let service: ResultsService;
+  let repository: ResultsRepository;
+
+  beforeEach(async () => {
+    const module = await Test.createTestingModule({
+      providers: [
+        ResultsService,
+        { provide: ResultsRepository, useValue: mockRepository },
+      ],
+    }).compile();
+
+    service = module.get<ResultsService>(ResultsService);
+    repository = module.get<ResultsRepository>(ResultsRepository);
+  });
+
+  it('should return regional overview', async () => {
+    jest.spyOn(repository, 'findRegionalOverview').mockResolvedValue(mockResults);
+    const result = await service.getRegionalOverview('election-id');
+    expect(result).toBeDefined();
+  });
+});
+```
+
+---
+
+## 10. Technical Decisions Summary
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
