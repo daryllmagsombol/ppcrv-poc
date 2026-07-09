@@ -51,6 +51,13 @@ export class ResultsService {
     };
   }
 
+  getContests(): { code: string; name: string }[] {
+    const sql = `SELECT DISTINCT contest_code FROM '${this.parquetBase}/national/*.parquet' ORDER BY contest_code`;
+    const output = execSync(`duckdb -json -c "${sql}"`, { encoding: 'utf-8' });
+    const rows = JSON.parse(output) as any[];
+    return rows.map(r => ({ code: r.contest_code, name: r.contest_code }));
+  }
+
   getDistinctValues(level: string, column: string, parents?: Record<string, string>): string[] {
     const whereClause = parents && Object.keys(parents).length > 0
       ? 'WHERE ' + Object.entries(parents)

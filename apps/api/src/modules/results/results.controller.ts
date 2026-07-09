@@ -1,8 +1,9 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query, UsePipes, ValidationPipe } from '@nestjs/common';
 import { ResultsService } from './results.service';
 import { ResultQueryDto } from './dto/result-query.dto';
 import { ResultsResponse } from './dto/results-response.dto';
 
+@UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
 @Controller('api')
 export class ResultsController {
   constructor(private readonly resultsService: ResultsService) {}
@@ -51,10 +52,7 @@ export class ResultsController {
   }
 
   @Get('contests')
-  getContests(): Promise<any[]> {
-    const sql = `SELECT DISTINCT contest_code FROM '${process.env.PARQUET_BASE_PATH || './output'}/national/*.parquet' ORDER BY contest_code`;
-    const output = require('child_process').execSync(`duckdb -json -c "${sql}"`, { encoding: 'utf-8' });
-    const rows = JSON.parse(output) as any[];
-    return Promise.resolve(rows.map(r => ({ code: r.contest_code, name: r.contest_code })));
+  getContests(): { code: string; name: string }[] {
+    return this.resultsService.getContests();
   }
 }
