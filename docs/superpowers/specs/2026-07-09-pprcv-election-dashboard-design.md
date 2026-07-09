@@ -212,39 +212,61 @@ modules/
 
 ### Next.js Frontend (apps/web/src/)
 
+Following Next.js best practices:
+- **App Router** with Server Components by default
+- **'use client'** only when needed (interactive components)
+- **Server Actions** for mutations (upload)
+- **Route Handlers** for API proxy only
+- **Proper error boundaries** (error.tsx, not-found.tsx)
+- **Metadata** for SEO
+- **next/image** for all images
+- **next/font** for typography
+
 ```
 src/
 ├── app/
-│   ├── page.tsx                    # Homepage - regional overview
+│   ├── layout.tsx                  # Root layout with fonts
+│   ├── page.tsx                    # Homepage - regional overview (Server Component)
+│   ├── loading.tsx                 # Loading UI
+│   ├── error.tsx                   # Error boundary
+│   ├── not-found.tsx               # 404 page
 │   ├── results/
-│   │   ├── page.tsx                # All contests
+│   │   ├── page.tsx                # All contests (Server Component)
 │   │   └── [contestCode]/
-│   │       └── page.tsx            # Contest detail with drill-down
+│   │       ├── page.tsx            # Contest detail (Server Component)
+│   │       └── loading.tsx         # Loading state
 │   └── admin/
+│       ├── layout.tsx              # Admin layout
 │       ├── page.tsx                # Admin dashboard
 │       └── upload/
-│           └── page.tsx            # CSV upload interface
+│           └── page.tsx            # CSV upload (Client Component)
 ├── features/
 │   ├── results/
 │   │   ├── components/
-│   │   │   ├── RegionMap.tsx
-│   │   │   ├── ResultsTable.tsx
-│   │   │   └── DrilldownBreadcrumb.tsx
-│   │   ├── hooks/
-│   │   │   └── useResults.ts
-│   │   └── api/
-│   │       └── results.ts
+│   │   │   ├── RegionMap.tsx       # 'use client' - interactive map
+│   │   │   ├── ResultsTable.tsx    # Server Component
+│   │   │   └── DrilldownBreadcrumb.tsx  # Server Component
+│   │   ├── actions/
+│   │   │   └── results.ts         # Server Actions for data fetching
+│   │   └── utils/
+│   │       └── format.ts          # Number formatting
 │   └── upload/
 │       ├── components/
-│       │   ├── FileDropzone.tsx
-│       │   └── UploadProgress.tsx
-│       └── hooks/
-│           └── useUpload.ts
+│       │   ├── FileDropzone.tsx    # 'use client' - drag & drop
+│       │   └── UploadProgress.tsx  # 'use client' - progress bar
+│       └── actions/
+│           └── upload.ts          # Server Actions for CSV upload
 ├── components/
 │   └── shared/
-└── lib/
-    ├── api.ts
-    └── utils.ts
+│       ├── Header.tsx              # Server Component
+│       ├── Footer.tsx              # Server Component
+│       ├── StampVerification.tsx   # 'use client' - animation
+│       └── ContestSelector.tsx     # 'use client' - dropdown
+├── lib/
+│   ├── api.ts                      # API client (fetch wrapper)
+│   └── utils.ts                    # Utility functions
+└── styles/
+    └── globals.css                 # Tailwind + custom CSS
 ```
 
 ### Shared Package (packages/shared/src/)
@@ -826,7 +848,294 @@ describe('ResultsService', () => {
 
 ---
 
-## 10. Technical Decisions Summary
+## 10. Next.js Best Practices Implementation
+
+### File Conventions
+
+**app-router-structure**: Use App Router with proper route segments:
+```
+app/
+├── page.tsx                    # Route: /
+├── results/
+│   ├── page.tsx                # Route: /results
+│   └── [contestCode]/
+│       └── page.tsx            # Route: /results/:contestCode
+└── admin/
+    └── upload/
+        └── page.tsx            # Route: /admin/upload
+```
+
+**error-boundaries**: Each route segment has error handling:
+```typescript
+// app/results/error.tsx
+'use client'
+
+export default function ResultsError({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string }
+  reset: () => void
+}) {
+  return (
+    <div className="error-container">
+      <h2>Something went wrong loading results</h2>
+      <button onClick={() => reset()}>Try again</button>
+    </div>
+  )
+}
+```
+
+**loading-states**: Loading UI for each route:
+```typescript
+// app/results/loading.tsx
+export default function ResultsLoading() {
+  return (
+    <div className="animate-pulse">
+      <div className="h-8 bg-gray-200 rounded w-1/3 mb-4" />
+      <div className="h-64 bg-gray-200 rounded" />
+    </div>
+  )
+}
+```
+
+### RSC Boundaries
+
+**server-components-default**: Pages and layouts are Server Components:
+```typescript
+// app/results/page.tsx (Server Component - no 'use client')
+import { getRegionalOverview } from '@/features/results/actions/results'
+import { ResultsTable } from '@/features/results/components/ResultsTable'
+
+export default async function ResultsPage() {
+  const data = await getRegionalOverview()
+  
+  return (
+    <main>
+      <h1>Election Results</h1>
+      <ResultsTable data={data} />
+    </main>
+  )
+}
+```
+
+**client-components-when-needed**: Only use 'use client' for interactivity:
+```typescript
+// features/results/components/RegionMap.tsx
+'use client'
+
+import { useState } from 'react'
+
+export function RegionMap({ regions }: { regions: Region[] }) {
+  const [selectedRegion, setSelectedRegion] = useState<string | null>(null)
+  
+  return (
+    <div>
+      {/* Interactive map implementation */}
+    </div>
+  )
+}
+```
+
+**serializable-props**: Server Components pass serializable data to Client Components:
+```typescript
+// Good - serializable data
+<ResultsTable data={JSON.parse(JSON.stringify(results))} />
+
+// Bad - non-serializable (functions, classes)
+<ResultsTable formatter={new Intl.NumberFormat()} />
+```
+
+### Async Patterns
+
+**async-params**: Dynamic route params are async in Next.js 15+:
+```typescript
+// app/results/[contestCode]/page.tsx
+export default async function ContestPage({
+  params,
+}: {
+  params: Promise<{ contestCode: string }>
+}) {
+  const { contestCode } = await params
+  const results = await getContestResults(contestCode)
+  
+  return <ContestDetail results={results} />
+}
+```
+
+**async-searchparams**: Search params are also async:
+```typescript
+export default async function ResultsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ snapshotId?: string }>
+}) {
+  const { snapshotId } = await searchParams
+  // ...
+}
+```
+
+### Data Patterns
+
+**avoid-waterfalls**: Use Promise.all for parallel data fetching:
+```typescript
+// Good - parallel
+const [elections, contests, snapshots] = await Promise.all([
+  getElections(),
+  getContests(),
+  getSnapshots(),
+])
+
+// Bad - waterfall
+const elections = await getElections()
+const contests = await getContests()
+const snapshots = await getSnapshots()
+```
+
+**server-actions-for-mutations**: Use Server Actions for form submissions:
+```typescript
+// features/upload/actions/upload.ts
+'use server'
+
+import { revalidatePath } from 'next/cache'
+
+export async function uploadCsv(formData: FormData) {
+  const file = formData.get('file') as File
+  const electionId = formData.get('electionId') as string
+  
+  // Validate and process
+  const result = await processUpload(file, electionId)
+  
+  revalidatePath('/admin/upload')
+  return { success: true, snapshotId: result.id }
+}
+```
+
+### Metadata
+
+**dynamic-metadata**: Use generateMetadata for dynamic pages:
+```typescript
+// app/results/[contestCode]/page.tsx
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ contestCode: string }>
+}): Promise<Metadata> {
+  const { contestCode } = await params
+  const contest = await getContest(contestCode)
+  
+  return {
+    title: `${contest.name} - PPCRV Election Results`,
+    description: `View results for ${contest.name} in the 2025 Philippine Elections`,
+  }
+}
+```
+
+### Image Optimization
+
+**next-image**: Always use next/image for images:
+```typescript
+import Image from 'next/image'
+
+// Good
+<Image
+  src="/ppcrv-logo.png"
+  alt="PPCRV Logo"
+  width={200}
+  height={100}
+  priority  // LCP image
+/>
+
+// Bad
+<img src="/ppcrv-logo.png" alt="PPCRV Logo" />
+```
+
+### Font Optimization
+
+**next-font**: Load fonts with next/font:
+```typescript
+// app/layout.tsx
+import { Playfair_Display, Source_Sans_3, JetBrains_Mono } from 'next/font/google'
+
+const playfair = Playfair_Display({
+  subsets: ['latin'],
+  variable: '--font-display',
+})
+
+const sourceSans = Source_Sans_3({
+  subsets: ['latin'],
+  variable: '--font-body',
+})
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  variable: '--font-data',
+})
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <html lang="en" className={`${playfair.variable} ${sourceSans.variable} ${jetbrainsMono.variable}`}>
+      <body>{children}</body>
+    </html>
+  )
+}
+```
+
+### CSS/Styling
+
+**tailwind-css**: Use Tailwind CSS with custom CSS variables:
+```css
+/* styles/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink-blue: #1B3A5C;
+  --ballot-cream: #F8F6F0;
+  --stamp-red: #C41E3A;
+  --seal-gold: #B8860B;
+  --field-gray: #E8E5DE;
+  --precinct-green: #2D5A3D;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--ballot-cream);
+  color: var(--ink-blue);
+}
+```
+
+### Hydration Errors
+
+**avoid-hydration-issues**: Prevent common hydration errors:
+```typescript
+// Bad - browser API in Server Component
+export default function ResultsPage() {
+  const timestamp = Date.now() // Different on server vs client
+  return <div>{timestamp}</div>
+}
+
+// Good - use suppressHydrationWarning for timestamps
+export default function ResultsPage() {
+  return <div suppressHydrationWarning>{new Date().toISOString()}</div>
+}
+
+// Good - Client Component for browser APIs
+'use client'
+export function RegionSelector() {
+  const [region, setRegion] = useState('NCR')
+  return <select onChange={(e) => setRegion(e.target.value)}>...</select>
+}
+```
+
+---
+
+## 11. Technical Decisions Summary
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
