@@ -29,7 +29,7 @@ Each entry follows this structure:
 
 ## 2026-07-09 — Added local ETL testing setup with DuckDB + Postgres
 
-**Files changed:** `pyproject.toml` (new), `src/etl/__init__.py` (new), `src/etl/models.py` (new), `src/etl/processor.py` (new), `tests/etl/__init__.py` (new), `tests/etl/test_processor.py` (new), `tests/etl/fixtures/sample.csv` (new), `tests/etl/fixtures/multiple.csv` (new), `tests/etl/fixtures/edge.csv` (new), `scripts/load_ref_data.py` (new), `docs/CHANGES.md`, `docs/superpowers/specs/2026-07-09-etl-local-testing-design.md` (new), `docs/superpowers/plans/2026-07-09-etl-local-testing.md` (new)
+**Files changed:** `pyproject.toml` (new), `src/etl/__init__.py` (new), `src/etl/models.py` (new), `src/etl/processor.py` (new), `tests/etl/__init__.py` (new), `tests/etl/test_processor.py` (new), `tests/etl/fixtures/sample.csv` (new), `tests/etl/fixtures/multiple.csv` (new), `tests/etl/fixtures/edge.csv` (new), `scripts/load_ref_data.py` (new), `etl/USE.md` (new), `docs/CHANGES.md`, `docs/superpowers/specs/2026-07-09-etl-local-testing-design.md` (new), `docs/superpowers/plans/2026-07-09-etl-local-testing.md` (new)
 **Author:** Team Leader (subagents)
 **Summary:** Set up local ETL testing infrastructure for PPCRV v3 election monitoring using DuckDB (CSV → Parquet aggregation) and Postgres (reference data). Pure Python + pytest, no Docker or cloud SDK needed.
 
