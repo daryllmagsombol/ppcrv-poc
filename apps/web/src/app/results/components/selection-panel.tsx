@@ -3,10 +3,16 @@
 import { useState, useEffect } from 'react';
 import { CascadingDropdown } from './cascading-dropdown';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
-
 interface SelectionPanelProps {
   onSelectionChange: (filters: Record<string, string>) => void;
+}
+
+const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+
+async function fetchJson(url: string): Promise<any> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
 }
 
 export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
@@ -36,51 +42,51 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
 
   useEffect(() => {
     setLoading(prev => ({ ...prev, regions: true }));
-    fetch(`${API}/regions`)
-      .then(r => r.json())
+    fetchJson(`${API}/regions`)
       .then(setRegions)
+      .catch(() => setRegions([]))
       .finally(() => setLoading(prev => ({ ...prev, regions: false })));
   }, []);
 
   useEffect(() => {
-    fetch(`${API}/contests`)
-      .then(r => r.json())
-      .then(setContests);
+    fetchJson(`${API}/contests`)
+      .then(setContests)
+      .catch(() => setContests([]));
   }, []);
 
   useEffect(() => {
     if (!selectedRegion) { setProvinces([]); setSelectedProvince(''); return; }
     setLoading(prev => ({ ...prev, provinces: true }));
-    fetch(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces`)
-      .then(r => r.json())
+    fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces`)
       .then(setProvinces)
+      .catch(() => setProvinces([]))
       .finally(() => setLoading(prev => ({ ...prev, provinces: false })));
   }, [selectedRegion]);
 
   useEffect(() => {
     if (!selectedProvince) { setMunicipalities([]); setSelectedMunicipality(''); return; }
     setLoading(prev => ({ ...prev, municipalities: true }));
-    fetch(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces/${encodeURIComponent(selectedProvince)}/municipalities`)
-      .then(r => r.json())
+    fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces/${encodeURIComponent(selectedProvince)}/municipalities`)
       .then(setMunicipalities)
+      .catch(() => setMunicipalities([]))
       .finally(() => setLoading(prev => ({ ...prev, municipalities: false })));
   }, [selectedProvince]);
 
   useEffect(() => {
     if (!selectedMunicipality) { setBarangays([]); setSelectedBarangay(''); return; }
     setLoading(prev => ({ ...prev, barangays: true }));
-    fetch(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces/${encodeURIComponent(selectedProvince)}/municipalities/${encodeURIComponent(selectedMunicipality)}/barangays`)
-      .then(r => r.json())
+    fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces/${encodeURIComponent(selectedProvince)}/municipalities/${encodeURIComponent(selectedMunicipality)}/barangays`)
       .then(setBarangays)
+      .catch(() => setBarangays([]))
       .finally(() => setLoading(prev => ({ ...prev, barangays: false })));
   }, [selectedMunicipality]);
 
   useEffect(() => {
     if (!selectedBarangay) { setVotingCenters([]); setSelectedVC(''); return; }
     setLoading(prev => ({ ...prev, vcs: true }));
-    fetch(`${API}/barangays/${encodeURIComponent(selectedBarangay)}/voting-centers`)
-      .then(r => r.json())
+    fetchJson(`${API}/barangays/${encodeURIComponent(selectedBarangay)}/voting-centers`)
       .then(setVotingCenters)
+      .catch(() => setVotingCenters([]))
       .finally(() => setLoading(prev => ({ ...prev, vcs: false })));
   }, [selectedBarangay]);
 
