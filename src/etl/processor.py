@@ -18,25 +18,30 @@ def parse_and_aggregate(
 
     con = duckdb.connect()
     try:
+        # Materialize CSV once — avoids re-scanning the file per partition
         con.execute(
-            f"CREATE OR REPLACE VIEW csv_data AS "
+            f"CREATE TABLE raw_data AS "
             f"SELECT * FROM read_csv_auto('{csv_path_str}')"
         )
 
+        # Aggregate once into a temporary table, lowercase columns for Parquet compat
+        con.execute(
+            "CREATE TABLE agg_data AS "
+            "SELECT "
+            "precinct_code::VARCHAR AS precinct_code, "
+            "contest_code::VARCHAR AS contest_code, "
+            "candidate_name::VARCHAR AS candidate_name, "
+            "party_code::VARCHAR AS party_code, "
+            "SUM(CAST(votes_amount AS INTEGER)) AS total_votes, "
+            "SUM(CAST(over_votes AS INTEGER)) AS total_over_votes, "
+            "SUM(CAST(under_votes AS INTEGER)) AS total_under_votes "
+            "FROM raw_data "
+            "GROUP BY precinct_code, contest_code, candidate_name, party_code"
+        )
+
         rows = con.execute(
-            """
-            SELECT
-                precinct_code,
-                contest_code,
-                candidate_name,
-                party_code,
-                SUM(CAST(votes_amount AS INTEGER)) AS total_votes,
-                SUM(CAST(over_votes AS INTEGER)) AS total_over_votes,
-                SUM(CAST(under_votes AS INTEGER)) AS total_under_votes
-            FROM csv_data
-            GROUP BY precinct_code, contest_code, candidate_name, party_code
-            ORDER BY precinct_code, contest_code, total_votes DESC
-            """
+            "SELECT * FROM agg_data "
+            "ORDER BY precinct_code, contest_code, total_votes DESC"
         ).fetchall()
 
         if not rows:
@@ -51,9 +56,9 @@ def parse_and_aggregate(
             contests.add(row[1])
             total_votes_count += row[4]
 
-        # Derive partition values from the requested column (not hardcoded)
+        # Derive partition values from the aggregated table
         distinct_values = con.execute(
-            f"SELECT DISTINCT {partition_by} FROM csv_data ORDER BY 1"
+            f"SELECT DISTINCT {partition_by} FROM agg_data ORDER BY 1"
         ).fetchall()
         distinct_values = [r[0] for r in distinct_values]
 
@@ -63,15 +68,7 @@ def parse_and_aggregate(
             out_path.parent.mkdir(parents=True, exist_ok=True)
             con.execute(
                 f"COPY ("
-                f"SELECT precinct_code::VARCHAR AS precinct_code, "
-                f"contest_code::VARCHAR AS contest_code, "
-                f"candidate_name::VARCHAR AS candidate_name, "
-                f"party_code::VARCHAR AS party_code, "
-                f"SUM(CAST(votes_amount AS INTEGER)) AS total_votes, "
-                f"SUM(CAST(over_votes AS INTEGER)) AS total_over_votes, "
-                f"SUM(CAST(under_votes AS INTEGER)) AS total_under_votes "
-                f"FROM csv_data WHERE {partition_by} = ? "
-                f"GROUP BY precinct_code, contest_code, candidate_name, party_code"
+                f"SELECT * FROM agg_data WHERE {partition_by} = ?"
                 f") TO '{out_path}' (FORMAT PARQUET)",
                 [val],
             )
