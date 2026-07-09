@@ -3,7 +3,7 @@ import { IsOptional, IsString, IsIn } from 'class-validator';
 export class ResultQueryDto {
   @IsString()
   @IsIn(['national', 'region', 'province', 'municipality', 'barangay', 'precinct'])
-  level: string;
+  level!: string;
 
   @IsOptional()
   @IsString()
