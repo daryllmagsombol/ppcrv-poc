@@ -63,16 +63,16 @@ for row in con.execute(\"\"\"
     FROM read_parquet('output/**/*.parquet')
     GROUP BY contest_code ORDER BY contest_code
 \"\"\").fetchall():
-    print(f'  contest={row[0]:10s}  rows={row[1]:>6}  votes={row[2]:>10}')
+    print(f'  contest={row[0]:>10}  rows={row[1]:>6}  votes={row[2]:>10}')
 con.close()
 "
 ```
 
 Example output:
 ```
-  contest=1010010    rows=   4  votes=       883
-  contest=1010020    rows=   6  votes=       ...
-  contest=1010030    rows=  12  votes=       ...
+  contest=   1010010  rows=     4  votes=     883.0
+  contest=   1054160  rows=  5019  votes= 1270503.0
+  contest=   1199000  rows=14385240  votes=41658790.0
   ...
 ```
 
@@ -163,7 +163,7 @@ pytest tests/etl/ -v
 python3 -c "from src.etl.processor import parse_and_aggregate; r=parse_and_aggregate('sample-csv/results.csv','output/'); print(r)"
 
 # Quick summary
-python3 -c "import duckdb; con=duckdb.connect(); [print(f'  contest={r[0]:10s}  rows={r[1]:>6}  votes={r[2]:>10}') for r in con.execute(\"SELECT contest_code, COUNT(*), SUM(total_votes) FROM read_parquet('output/**/*.parquet') GROUP BY contest_code ORDER BY contest_code\").fetchall()]; con.close()"
+python3 -c "import duckdb; con=duckdb.connect(); [print(f'  contest={r[0]:>10}  rows={r[1]:>6}  votes={r[2]:>10}') for r in con.execute(\"SELECT contest_code, COUNT(*), SUM(total_votes) FROM read_parquet('output/**/*.parquet') GROUP BY contest_code ORDER BY contest_code\").fetchall()]; con.close()"
 
 # Load Postgres
 python3 scripts/load_ref_data.py          # skip if loaded
