@@ -57,13 +57,25 @@ python3 -c "
 import pyarrow.parquet as pq, glob
 for f in sorted(glob.glob('output/**/*.parquet', recursive=True)):
     print(f'--- {f} ---')
-    print(pq.ParquetFile(f).read().to_pandas().to_string())
+    table = pq.ParquetFile(f).read()
+    for col in table.column_names:
+        print(f'  {col}: {table.column(col).to_pylist()}')
 "
 ```
 
-Output shows rows grouped by `contest_code` with columns: `precinct_code`, `contest_code`, `candidate_code`, `party_code`, `total_votes`, `total_overvote`, `total_undervote`.
+Example output:
+```
+--- output/contest_code=1199000/data.parquet ---
+  precinct_code: ['1010017', '1010017', '1010017']
+  contest_code: ['1199000', '1199000', '1199000']
+  candidate_code: ['9900110002', '9900110001', '9900110003']
+  party_code: ['9900110002', '9900110001', '9900110003']
+  total_votes: [0.0, 0.0, 0.0]
+  total_overvote: [0.0, 0.0, 0.0]
+  total_undervote: [0.0, 0.0, 0.0]
+```
 
-> **Note:** Uses `ParquetFile().read()` instead of `read_table()` to avoid DuckDB's dictionary encoding vs pyarrow schema merge conflict.
+> **Note:** Uses `ParquetFile().read()` + `to_pylist()` instead of `read_table()` + `to_pandas()` to avoid DuckDB dictionary encoding and missing pandas module issues.
 
 ---
 
@@ -122,7 +134,7 @@ pytest tests/etl/ -v
 
 # Run + inspect
 python3 -c "from src.etl.processor import parse_and_aggregate; r=parse_and_aggregate('sample-csv/results.csv','output/'); print(r)"
-python3 -c "import pyarrow.parquet as pq, glob; [print(f'--- {f} ---\n{pq.ParquetFile(f).read().to_pandas().to_string()}') for f in sorted(glob.glob('output/**/*.parquet', recursive=True))]"
+python3 -c "import pyarrow.parquet as pq, glob; [print(f'--- {f} ---') or [print(f'  {c}: {table.column(c).to_pylist()}') for c in (table:=pq.ParquetFile(f).read()).column_names] for f in sorted(glob.glob('output/**/*.parquet', recursive=True))]"
 
 # Load Postgres
 python3 scripts/load_ref_data.py
