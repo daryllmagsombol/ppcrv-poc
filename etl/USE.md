@@ -52,30 +52,55 @@ python3 -c "from src.etl.processor import parse_and_aggregate; print(parse_and_a
 
 ## 3. Inspect Parquet Output
 
+### Quick summary (fast — one pass over all partitions)
+
 ```bash
 python3 -c "
-import pyarrow.parquet as pq, glob
-for f in sorted(glob.glob('output/**/*.parquet', recursive=True)):
-    print(f'--- {f} ---')
-    table = pq.ParquetFile(f).read()
-    for col in table.column_names:
-        print(f'  {col}: {table.column(col).to_pylist()}')
+import duckdb
+con = duckdb.connect()
+for row in con.execute(\"\"\"
+    SELECT contest_code, COUNT(*) AS rows, SUM(total_votes) AS votes
+    FROM read_parquet('output/**/*.parquet')
+    GROUP BY contest_code ORDER BY contest_code
+\"\"\").fetchall():
+    print(f'  contest={row[0]:10s}  rows={row[1]:>6}  votes={row[2]:>10}')
+con.close()
 "
 ```
 
 Example output:
 ```
---- output/contest_code=1010010/data.parquet ---
-  precinct_code: ['10010001', '10010001', '10010001', '10010001']
-  contest_code: ['1010010', '1010010', '1010010', '1010010']
-  candidate_name: ['ANDAL, GLENN (LAKAS)', 'BALBA, JAY JAY (LAKAS)', 'CACAO, VIONG (NPC)', 'CARINGAL, KIDLAT (NPC)']
-  party_code: ['28', '28', '34', '34']
-  total_votes: [242.0, 234.0, 217.0, 190.0]
-  total_over_votes: [16.0, 16.0, 16.0, 16.0]
-  total_under_votes: [748.0, 748.0, 748.0, 748.0]
+  contest=1010010    rows=   4  votes=       883
+  contest=1010020    rows=   6  votes=       ...
+  contest=1010030    rows=  12  votes=       ...
+  ...
 ```
 
-> **Note:** Uses `ParquetFile().read()` + `to_pylist()` instead of `read_table()` + `to_pandas()` to avoid DuckDB dictionary encoding and missing pandas issues.
+### Peek at a sample (first 3 partitions)
+
+```bash
+python3 -c "
+import duckdb, glob
+con = duckdb.connect()
+dirs = sorted(glob.glob('output/contest_code=*/'))[:3]
+for d in dirs:
+    print(f'--- {d.strip(\"/\").split(\"=\")[1]} ---')
+    for row in con.execute(f\"SELECT * FROM read_parquet('{d}*.parquet') LIMIT 3\").fetchall():
+        print(f'  {row}')
+con.close()
+"
+```
+
+### Full dump (slow for large datasets — only for small outputs)
+
+```bash
+python3 -c "
+import duckdb
+con = duckdb.connect()
+print(con.table('read_parquet(\"output/**/*.parquet\")').fetchall())
+con.close()
+"
+```
 
 ---
 
@@ -134,9 +159,11 @@ rm -rf output/
 # Test
 pytest tests/etl/ -v
 
-# Run + inspect
+# Run
 python3 -c "from src.etl.processor import parse_and_aggregate; r=parse_and_aggregate('sample-csv/results.csv','output/'); print(r)"
-python3 -c "import pyarrow.parquet as pq, glob; [print(f'--- {f} ---') or [print(f'  {c}: {table.column(c).to_pylist()}') for c in (table:=pq.ParquetFile(f).read()).column_names] for f in sorted(glob.glob('output/**/*.parquet', recursive=True))]"
+
+# Quick summary
+python3 -c "import duckdb; con=duckdb.connect(); [print(f'  contest={r[0]:10s}  rows={r[1]:>6}  votes={r[2]:>10}') for r in con.execute(\"SELECT contest_code, COUNT(*), SUM(total_votes) FROM read_parquet('output/**/*.parquet') GROUP BY contest_code ORDER BY contest_code\").fetchall()]; con.close()"
 
 # Load Postgres
 python3 scripts/load_ref_data.py          # skip if loaded
