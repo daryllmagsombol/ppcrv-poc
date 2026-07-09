@@ -966,6 +966,32 @@ Prevents malformed CSVs from wasting ETL compute.
 
 ---
 
+## Local Development
+
+The repository includes a POC that runs entirely locally — no cloud services needed.
+
+**Quick start:**
+
+```bash
+pnpm install                        # Install JS deps
+pip install duckdb pytest            # Python ETL deps
+python3 scripts/run_aggregation.py \
+  sample-csv/results.csv \
+  sample-csv/precincts.csv \
+  output/multi-level --sample 100000  # Generate Parquet data
+pnpm dev                            # Start API (3001) + Web (3000)
+```
+
+| Component | Stack | Port |
+|-----------|-------|------|
+| **API** | NestJS 10 → DuckDB CLI | 3001 |
+| **Web** | Next.js 14 + Tailwind CSS | 3000 |
+| **ETL** | Python + DuckDB | — |
+
+Full setup guide, project structure, and troubleshooting: **[docs/DEV-SETUP.md](./docs/DEV-SETUP.md)**.
+
+---
+
 ## Open Items
 
 | # | Item | Status |

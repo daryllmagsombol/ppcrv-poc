@@ -12,7 +12,7 @@ export class ResultsService {
     // Default: resolve relative to project root (2 levels up from apps/api/)
     this.parquetBase =
       process.env.PARQUET_BASE_PATH ||
-      path.resolve(__dirname, '..', '..', '..', '..', 'output');
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'output', 'multi-level');
   }
 
   queryResults(dto: ResultQueryDto): ResultsResponse {
@@ -56,7 +56,7 @@ export class ResultsService {
   }
 
   getContests(): { code: string; name: string }[] {
-    const sql = `SELECT DISTINCT contest_code FROM '${this.parquetBase}/national/*.parquet' ORDER BY contest_code`;
+    const sql = `SELECT DISTINCT contest_code FROM '${this.parquetBase}/national/**/*.parquet' ORDER BY contest_code`;
     const output = execSync(`duckdb -json -c "${sql}"`, { encoding: 'utf-8' });
     const rows = JSON.parse(output) as any[];
     return rows.map(r => ({ code: r.contest_code, name: r.contest_code }));
@@ -69,7 +69,7 @@ export class ResultsService {
           .join(' AND ')
       : '';
 
-    const sql = `SELECT DISTINCT ${column} FROM '${this.parquetBase}/${level}/*.parquet' ${whereClause} ORDER BY ${column}`;
+    const sql = `SELECT DISTINCT ${column} FROM '${this.parquetBase}/${level}/**/*.parquet' ${whereClause} ORDER BY ${column}`;
     const output = execSync(`duckdb -json -c "${sql}"`, { encoding: 'utf-8' });
     const rows = JSON.parse(output) as any[];
     return rows.map(r => r[column]).filter(Boolean);
@@ -77,7 +77,7 @@ export class ResultsService {
 
   private buildQuery(dto: ResultQueryDto): { sql: string; level: string } {
     const level = dto.level;
-    const glob = `${this.parquetBase}/${level}/*.parquet`;
+    const glob = `${this.parquetBase}/${level}/**/*.parquet`;
 
     const where: string[] = [];
     if (dto.contest) where.push(`contest_code = '${dto.contest.replace(/'/g, "''")}'`);

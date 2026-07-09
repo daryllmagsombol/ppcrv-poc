@@ -27,6 +27,64 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-09 — Multi-level aggregation, NestJS API, Next.js UI, monorepo setup, and path fixes
+
+**Files changed:**
+- `docs/CHANGES.md`, `docs/superpowers/specs/2026-07-09-multi-level-aggregation-design.md` (new),
+  `docs/superpowers/plans/2026-07-09-multi-level-aggregation-plan.md` (new)
+- `src/etl/models.py`, `src/etl/aggregator.py` (new), `scripts/run_aggregation.py` (new)
+- `tests/etl/test_aggregator.py` (new), `tests/etl/fixtures/precincts.csv`
+- `apps/api/` — full NestJS app: `main.ts`, `app.module.ts`, `modules/results/` (controller, service, DTOs, tests)
+- `apps/web/` — full Next.js app: root layout, homepage, `app/results/` page with `SelectionPanel`, `CascadingDropdown`, `ResultsTable`, `BreadcrumbNav`
+- Monorepo root: `package.json`, `pnpm-workspace.yaml`, `turbo.json`, `.npmrc`
+- `packages/shared/` — stub shared types
+
+**Author:** Team Leader (subagents)
+**Summary:** Built a full POC pipeline: DuckDB multi-level aggregation (6 geographic levels) → partitioned Parquet → NestJS API querying via DuckDB CLI → Next.js UI with cascading geographic selection panel. Set up pnpm + Turborepo monorepo to run all apps.
+
+### What changed
+
+**Multi-level ETL (`src/etl/aggregator.py`):**
+- `aggregate_all_levels()` — single-pass DuckDB aggregation for all 6 levels (national, region, province, municipality, barangay, precinct)
+- LPAD join on precinct codes (8 chars) via `results` + `precincts` CSV join
+- Hive-partitioned Parquet output by `contest_code`
+- `LevelResult` and `MultiLevelAggregationResult` dataclasses in `src/etl/models.py`
+- 7 pytest tests in `tests/etl/test_aggregator.py`
+- `scripts/run_aggregation.py` CLI entry point with `--sample` flag
+
+**NestJS API (`apps/api/`):**
+- `ResultsService` — shells out to `duckdb` CLI with `-json` flag for on-read Parquet queries
+- `ResultsController` — REST endpoints: `/api/results`, `/api/regions`, `/api/regions/:reg/provinces`, cascading geo endpoints, `/api/contests`
+- Input validation via `class-validator` DTOs and `ValidationPipe`
+- Service/controller test files
+
+**Next.js UI (`apps/web/`):**
+- Root layout with PPCRV brand colors (`#1B3A5C` ink-blue, `#F8F6F0` ballot-cream, `#C41E3A` stamp-red)
+- Results page with collapsible `SelectionPanel` (6 cascading dropdowns: region → province → municipality → barangay → voting center → contest)
+- `CascadingDropdown` component — fetches options from API, enables/disables based on parent selection, clears children on parent change
+- `ResultsTable` — renders candidate rankings, votes, percentages
+- `BreadcrumbNav` for geographic drill context
+- Homepage with link to `/results`
+
+**Monorepo:**
+- pnpm workspaces with `apps/api`, `apps/web`, `packages/shared`
+- `turbo.json` with `tasks` config for `dev`, `build`, `test` across workspace
+- `.npmrc` with `shamefully-hoist=true` for NestJS compat
+
+**Today's fixes (2026-07-09 session):**
+- Fixed `parquetBase` path resolution from `__dirname` to point at project root `output/multi-level/`
+- Changed all DuckDB file globs from `/*.parquet` to `/**/*.parquet` to handle Hive-partitioned subdirectories
+- Ran `scripts/run_aggregation.py` with 100k sample rows → generated all 6 levels of partitioned Parquet
+- Verified all API endpoints respond correctly with live data (3,193 contests, 17 regions, cascading geo queries, results aggregation)
+
+### Why
+- Needed to demonstrate end-to-end vote aggregation at every geographic level the PPCRV platform supports
+- DuckDB CLI provides sub-millisecond on-read Parquet queries without a database server — ideal for a lightweight POC
+- pnpm + Turborepo gives fast parallel dev startup and clear workspace isolation
+- The path and glob bugs only surfaced when connecting the API to real partitioned Parquet data
+
+---
+
 ## 2026-07-09 — Added local ETL testing setup with DuckDB + Postgres
 
 **Files changed:** `pyproject.toml` (new), `src/etl/__init__.py` (new), `src/etl/models.py` (new), `src/etl/processor.py` (new), `tests/etl/__init__.py` (new), `tests/etl/test_processor.py` (new), `tests/etl/fixtures/sample.csv` (new), `tests/etl/fixtures/multiple.csv` (new), `tests/etl/fixtures/edge.csv` (new), `scripts/load_ref_data.py` (new), `etl/USE.md` (new), `docs/CHANGES.md`, `docs/superpowers/specs/2026-07-09-etl-local-testing-design.md` (new), `docs/superpowers/plans/2026-07-09-etl-local-testing.md` (new)
