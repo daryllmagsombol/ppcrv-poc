@@ -107,7 +107,7 @@ def aggregate_all_levels(
 
         results: dict[str, LevelResult] = {}
 
-        for level_name, group_cols, _geo_cols in LEVEL_CONFIG:
+        for level_name, group_cols, *_ in LEVEL_CONFIG:
             level_dir = output_dir / level_name
             level_dir.mkdir(parents=True, exist_ok=True)
 
