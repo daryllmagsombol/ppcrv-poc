@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ResultQueryDto } from './dto/result-query.dto';
-import { ResultsResponse, CandidateResult } from './dto/results-response.dto';
+import { ResultsResponse, CandidateResult, ContestGroup } from './dto/results-response.dto';
 import { ContestInfo } from './dto/contest-info.dto';
 
 const CATEGORY_MAP: Record<string, string> = {
@@ -56,14 +56,13 @@ export class ResultsService {
 
     const rows = JSON.parse(output) as any[];
 
-    const totalVotes = rows.reduce((sum, r) => sum + r.votes, 0);
-    const candidates: CandidateResult[] = rows.map((r, i) => ({
-      rank: i + 1,
-      name: r.candidate_name,
-      party: r.party_code || '',
-      votes: r.votes,
-      percentage: totalVotes > 0 ? Math.round((r.votes / totalVotes) * 1000) / 10 : 0,
-    }));
+    // Group rows by contest_code
+    const contestMap = new Map<string, any[]>();
+    for (const r of rows) {
+      const code = String(r.contest_code);
+      if (!contestMap.has(code)) contestMap.set(code, []);
+      contestMap.get(code)!.push(r);
+    }
 
     const filters: Record<string, string> = { level };
     if (dto.contest) filters.contest = dto.contest;
@@ -73,17 +72,35 @@ export class ResultsService {
     if (dto.brgy) filters.barangay = dto.brgy;
     if (dto.vc) filters.votingCenter = dto.vc;
 
-    return {
-      level,
-      filters,
-      totalVotes,
-      candidates,
-      totals: {
-        votesCast: totalVotes,
-        overVotes: rows.reduce((s, r) => s + (r.total_over_votes || 0), 0),
-        underVotes: rows.reduce((s, r) => s + (r.total_under_votes || 0), 0),
-      },
-    };
+    const contests: ContestGroup[] = [];
+
+    for (const [code, contestRows] of contestMap) {
+      // Sort by votes descending within contest
+      contestRows.sort((a, b) => b.votes - a.votes);
+
+      const totalVotes = contestRows.reduce((sum, r) => sum + Number(r.votes || 0), 0);
+      const overVotes = contestRows.reduce((s, r) => s + Number(r.total_over_votes || 0), 0);
+      const underVotes = contestRows.reduce((s, r) => s + Number(r.total_under_votes || 0), 0);
+
+      const candidates: CandidateResult[] = contestRows.map((r, i) => ({
+        rank: i + 1,
+        name: r.candidate_name,
+        party: r.party_code || '',
+        votes: Number(r.votes),
+        percentage: totalVotes > 0 ? Math.round((Number(r.votes) / totalVotes) * 1000) / 10 : 0,
+      }));
+
+      contests.push({
+        code,
+        name: this.contestNames[code] || code,
+        category: this.categoryFromCode(code),
+        totalVotes,
+        candidates,
+        totals: { votesCast: totalVotes, overVotes, underVotes },
+      });
+    }
+
+    return { level, filters, contests };
   }
 
   getContestsByGeography(params: ContestQueryParams): ContestInfo[] {
@@ -167,13 +184,13 @@ export class ResultsService {
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
 
     const sql = `
-      SELECT candidate_name, party_code, SUM(total_votes) as votes,
+      SELECT contest_code, candidate_name, party_code, SUM(total_votes) as votes,
              SUM(total_over_votes) as total_over_votes,
              SUM(total_under_votes) as total_under_votes
       FROM '${glob}'
       ${whereClause}
-      GROUP BY candidate_name, party_code
-      ORDER BY votes DESC
+      GROUP BY contest_code, candidate_name, party_code
+      ORDER BY contest_code, votes DESC
     `.trim().replace(/\s+/g, ' ');
 
     return { sql, level };

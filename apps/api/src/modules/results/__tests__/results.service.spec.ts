@@ -68,15 +68,15 @@ describe('ResultsService', () => {
       expect(level).toBe('province');
     });
 
-    it('should filter contests by category on frontend', () => {
-      expect(true).toBe(true);
-    });
   });
 
   describe('buildQuery', () => {
     it('should generate correct SQL for national level', () => {
       const { sql, level } = (service as any).buildQuery({ level: 'national' });
       expect(sql).toContain("FROM './output/national/**/*.parquet'");
+      expect(sql).toContain('SELECT contest_code');
+      expect(sql).toContain('GROUP BY contest_code');
+      expect(sql).toContain('ORDER BY contest_code');
       expect(level).toBe('national');
     });
 

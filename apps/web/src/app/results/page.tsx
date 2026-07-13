@@ -7,12 +7,19 @@ import { BreadcrumbNav } from './components/breadcrumb-nav';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
 
-interface ResultsData {
-  level: string;
-  filters: Record<string, string>;
+interface ContestGroup {
+  code: string;
+  name: string;
+  category: string;
   totalVotes: number;
   candidates: { rank: number; name: string; party: string; votes: number; percentage: number }[];
   totals: { votesCast: number; overVotes: number; underVotes: number };
+}
+
+interface ResultsData {
+  level: string;
+  filters: Record<string, string>;
+  contests: ContestGroup[];
 }
 
 export default function ResultsPage() {
@@ -45,8 +52,7 @@ export default function ResultsPage() {
       {results && <BreadcrumbNav filters={results.filters} />}
 
       <ResultsTable
-        candidates={results?.candidates || []}
-        totalVotes={results?.totalVotes || 0}
+        contests={results?.contests || []}
         loading={loading}
       />
     </main>

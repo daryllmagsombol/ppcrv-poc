@@ -6,9 +6,10 @@ export class CandidateResult {
   percentage!: number;
 }
 
-export class ResultsResponse {
-  level!: string;
-  filters!: Record<string, string>;
+export class ContestGroup {
+  code!: string;
+  name!: string;
+  category!: string;
   totalVotes!: number;
   candidates!: CandidateResult[];
   totals!: {
@@ -16,4 +17,10 @@ export class ResultsResponse {
     overVotes: number;
     underVotes: number;
   };
+}
+
+export class ResultsResponse {
+  level!: string;
+  filters!: Record<string, string>;
+  contests!: ContestGroup[];
 }
