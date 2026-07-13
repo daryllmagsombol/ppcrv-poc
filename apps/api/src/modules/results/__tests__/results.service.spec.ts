@@ -94,7 +94,7 @@ describe('ResultsService', () => {
       });
       expect(sql).toContain("reg_name = 'NCR'");
       expect(sql).toContain("prv_name = 'METRO MANILA'");
-      expect(sql).toContain('contest_code = 399000');
+      expect(sql).toContain('CAST(contest_code AS INTEGER) = 399000');
     });
 
     it('should add national_only filter for Senator and Party List', () => {

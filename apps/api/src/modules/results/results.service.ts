@@ -42,6 +42,8 @@ function esc(val: string): string {
   return val.replace(/'/g, "''");
 }
 
+const VALID_LEVELS = ['national', 'region', 'province', 'municipality', 'barangay', 'precinct'];
+
 @Injectable()
 export class ResultsService {
   private readonly parquetBase: string;
@@ -64,12 +66,17 @@ export class ResultsService {
   queryResults(dto: ResultQueryDto): ResultsResponse {
     const { sql, level } = this.buildQuery(dto);
 
-    const output = execFileSync('duckdb', ['-json', '-c', sql], {
-      encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    let rows: any[];
+    try {
+      const output = execFileSync('duckdb', ['-json', '-c', sql], {
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      rows = JSON.parse(output);
+    } catch {
+      throw new BadRequestException('Failed to query election results');
+    }
 
-    const rows = JSON.parse(output) as any[];
 
     // Group rows by contest_code (padded to 8 digits for JSON map lookup)
     const contestMap = new Map<string, any[]>();
@@ -120,11 +127,17 @@ export class ResultsService {
 
   getContestsByGeography(params: ContestQueryParams): ContestInfo[] {
     const { sql } = this.buildContestQuery(params);
-    const output = execFileSync('duckdb', ['-json', '-c', sql], {
-      encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    const rows = JSON.parse(output) as { contest_code: string | number }[];
+    let rows: { contest_code: string | number }[];
+    try {
+      const output = execFileSync('duckdb', ['-json', '-c', sql], {
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      rows = JSON.parse(output);
+    } catch {
+      throw new BadRequestException('Failed to query contests');
+    }
+
 
     return rows.map(r => {
       const code = padContestCode(r.contest_code);
@@ -187,6 +200,10 @@ export class ResultsService {
   }
 
   getDistinctValues(level: string, column: string, parents?: Record<string, string>): string[] {
+    if (!VALID_LEVELS.includes(level)) {
+      throw new BadRequestException(`Invalid level: ${level}`);
+    }
+
     const whereClause = parents && Object.keys(parents).length > 0
       ? 'WHERE ' + Object.entries(parents)
           .map(([k, v]) => `${k} = '${esc(v)}'`)
@@ -194,8 +211,13 @@ export class ResultsService {
       : '';
 
     const sql = `SELECT DISTINCT ${column} FROM '${this.parquetBase}/${level}/**/*.parquet' ${whereClause} ORDER BY ${column}`;
-    const output = execFileSync('duckdb', ['-json', '-c', sql], { encoding: 'utf-8' });
-    const rows = JSON.parse(output) as any[];
+    let rows: any[];
+    try {
+      const output = execFileSync('duckdb', ['-json', '-c', sql], { encoding: 'utf-8' });
+      rows = JSON.parse(output);
+    } catch {
+      throw new BadRequestException('Failed to query distinct values');
+    }
     return rows.map(r => r[column]).filter(Boolean);
   }
 
@@ -215,8 +237,7 @@ export class ResultsService {
         + " OR LPAD(CAST(contest_code AS VARCHAR), 8, '0') LIKE '011%')"
       );
     }
-    // M1: Compare contest_code as integer (strip leading zeros)
-    if (dto.contest) where.push(`contest_code = ${cleanContestCode(dto.contest)}`);
+    if (dto.contest) where.push(`CAST(contest_code AS INTEGER) = ${cleanContestCode(dto.contest)}`);
     if (dto.reg) where.push(`reg_name = '${esc(dto.reg)}'`);
     if (dto.prv) where.push(`prv_name = '${esc(dto.prv)}'`);
     if (dto.mun) where.push(`mun_name = '${esc(dto.mun)}'`);
