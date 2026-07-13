@@ -142,7 +142,12 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
   useEffect(() => {
     if (!selectedBarangay) { setVotingCenters([]); setSelectedVC(''); return; }
     setLoading(prev => ({ ...prev, vcs: true }));
-    void fetchJson(`${API}/barangays/${encodeURIComponent(selectedBarangay)}/voting-centers`)
+    const vcParams = new URLSearchParams({
+      reg: selectedRegion,
+      prv: selectedProvince,
+      mun: selectedMunicipality,
+    });
+    void fetchJson(`${API}/barangays/${encodeURIComponent(selectedBarangay)}/voting-centers?${vcParams}`)
       .then(setVotingCenters)
       .catch(() => setVotingCenters([]))
       .finally(() => setLoading(prev => ({ ...prev, vcs: false })));
