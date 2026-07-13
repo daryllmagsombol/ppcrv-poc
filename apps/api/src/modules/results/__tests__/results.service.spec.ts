@@ -94,7 +94,23 @@ describe('ResultsService', () => {
       });
       expect(sql).toContain("reg_name = 'NCR'");
       expect(sql).toContain("prv_name = 'METRO MANILA'");
-      expect(sql).toContain("contest_code = '00399000'");
+      expect(sql).toContain('contest_code = 399000');
+    });
+
+    it('should add national_only filter for Senator and Party List', () => {
+      const { sql } = (service as any).buildQuery({
+        level: 'national',
+        nationalOnly: 'true',
+      });
+      expect(sql).toContain("LIKE '003%'");
+      expect(sql).toContain("LIKE '011%'");
+      expect(sql).toContain('contest_code');
+    });
+
+    it('should not add national_only filter when flag is false', () => {
+      const { sql } = (service as any).buildQuery({ level: 'national' });
+      expect(sql).not.toContain("LIKE '003%'");
+      expect(sql).not.toContain("LIKE '011%'");
     });
   });
 });
