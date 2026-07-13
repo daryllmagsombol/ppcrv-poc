@@ -1,18 +1,56 @@
 import { Injectable } from '@nestjs/common';
 import { execSync } from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
 import { ResultQueryDto } from './dto/result-query.dto';
 import { ResultsResponse, CandidateResult } from './dto/results-response.dto';
+import { ContestInfo } from './dto/contest-info.dto';
+
+const CATEGORY_MAP: Record<string, string> = {
+  '003': 'Senator',
+  '004': 'Governor',
+  '005': 'Vice Governor',
+  '006': 'Provincial Board',
+  '007': 'House of Reps',
+  '008': 'Mayor',
+  '009': 'Vice Mayor',
+  '010': 'Councilor',
+  '011': 'Party List',
+  '012': 'BARMM Party Rep',
+  '014': 'BARMM Parliament',
+};
+
+const CATEGORY_ORDER: Record<string, number> = {
+  'Senator': 1,
+  'Party List': 2,
+  'Governor': 3,
+  'Vice Governor': 4,
+  'House of Reps': 5,
+  'Provincial Board': 6,
+  'Mayor': 7,
+  'Vice Mayor': 8,
+  'Councilor': 9,
+  'BARMM Party Rep': 10,
+  'BARMM Parliament': 11,
+};
 
 @Injectable()
 export class ResultsService {
   private readonly parquetBase: string;
+  private contestNames: Record<string, string> = {};
 
   constructor() {
     // Default: resolve relative to project root (2 levels up from apps/api/)
     this.parquetBase =
       process.env.PARQUET_BASE_PATH ||
       path.resolve(__dirname, '..', '..', '..', '..', '..', 'output', 'multi-level');
+
+    try {
+      const namesPath = path.resolve(__dirname, '..', '..', '..', '..', '..', 'data', 'contest-names.json');
+      this.contestNames = JSON.parse(fs.readFileSync(namesPath, 'utf-8'));
+    } catch {
+      console.warn('contest-names.json not found, falling back to contest_code as name');
+    }
   }
 
   queryResults(dto: ResultQueryDto): ResultsResponse {
@@ -73,6 +111,11 @@ export class ResultsService {
     const output = execSync(`duckdb -json -c "${sql}"`, { encoding: 'utf-8' });
     const rows = JSON.parse(output) as any[];
     return rows.map(r => r[column]).filter(Boolean);
+  }
+
+  private categoryFromCode(contestCode: string): string {
+    const prefix = contestCode.slice(0, 3);
+    return CATEGORY_MAP[prefix] || 'Unknown';
   }
 
   private buildQuery(dto: ResultQueryDto): { sql: string; level: string } {
