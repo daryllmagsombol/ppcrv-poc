@@ -28,4 +28,8 @@ export class ResultQueryDto {
   @IsOptional()
   @IsString()
   contest?: string;
+
+  @IsOptional()
+  @IsString()
+  nationalOnly?: string; // 'true' or undefined — mapped from query param national_only
 }
