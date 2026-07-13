@@ -106,7 +106,7 @@ def aggregate_all_levels(
             con.execute("SET memory_limit='6GB'")
             con.execute("SET threads=2")
             con.execute("SET preserve_insertion_order=false")
-            con.execute(f"SET temp_directory='{temp_dir}'")
+            con.execute(f"SET temp_directory='{str(temp_dir).replace(chr(39), chr(39)*2)}'")
 
             select_exprs = ", ".join(group_cols)
             join_source = _join_query(csv_path, precincts_path, sample)

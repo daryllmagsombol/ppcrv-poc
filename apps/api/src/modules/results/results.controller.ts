@@ -48,14 +48,11 @@ export class ResultsController {
   @Get('barangays/:brgy/voting-centers')
   getVotingCenters(
     @Param('brgy') brgy: string,
-    @Query('reg') reg?: string,
-    @Query('prv') prv?: string,
-    @Query('mun') mun?: string,
+    @Query('reg') reg: string,
+    @Query('prv') prv: string,
+    @Query('mun') mun: string,
   ): string[] {
-    const parents: Record<string, string> = { brgy_name: brgy };
-    if (reg) parents.reg_name = reg;
-    if (prv) parents.prv_name = prv;
-    if (mun) parents.mun_name = mun;
+    const parents: Record<string, string> = { brgy_name: brgy, reg_name: reg, prv_name: prv, mun_name: mun };
     return this.resultsService.getDistinctValues('precinct', 'pollplace', parents);
   }
 

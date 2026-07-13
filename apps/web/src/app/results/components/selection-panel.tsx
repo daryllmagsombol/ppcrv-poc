@@ -54,8 +54,10 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
 
   const [collapsed, setCollapsed] = useState(false);
 
-  // C1: Generation counter to discard stale fetchContests responses
+  // Generation counter to discard stale fetchContests responses
   const fetchGen = useRef(0);
+  // Generation counter to discard stale geography fetch responses
+  const geoGen = useRef(0);
 
   useEffect(() => {
     setLoading(prev => ({ ...prev, regions: true }));
@@ -114,33 +116,37 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
 
   useEffect(() => {
     if (!selectedRegion) { setProvinces([]); setSelectedProvince(''); return; }
+    const gen = ++geoGen.current;
     setLoading(prev => ({ ...prev, provinces: true }));
     void fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces`)
-      .then(setProvinces)
-      .catch(() => setProvinces([]))
-      .finally(() => setLoading(prev => ({ ...prev, provinces: false })));
+      .then(data => { if (gen === geoGen.current) setProvinces(data); })
+      .catch(() => { if (gen === geoGen.current) setProvinces([]); })
+      .finally(() => { if (gen === geoGen.current) setLoading(prev => ({ ...prev, provinces: false })); });
   }, [selectedRegion]);
 
   useEffect(() => {
     if (!selectedProvince) { setMunicipalities([]); setSelectedMunicipality(''); return; }
+    const gen = ++geoGen.current;
     setLoading(prev => ({ ...prev, municipalities: true }));
     void fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces/${encodeURIComponent(selectedProvince)}/municipalities`)
-      .then(setMunicipalities)
-      .catch(() => setMunicipalities([]))
-      .finally(() => setLoading(prev => ({ ...prev, municipalities: false })));
+      .then(data => { if (gen === geoGen.current) setMunicipalities(data); })
+      .catch(() => { if (gen === geoGen.current) setMunicipalities([]); })
+      .finally(() => { if (gen === geoGen.current) setLoading(prev => ({ ...prev, municipalities: false })); });
   }, [selectedProvince, selectedRegion]);
 
   useEffect(() => {
     if (!selectedMunicipality) { setBarangays([]); setSelectedBarangay(''); return; }
+    const gen = ++geoGen.current;
     setLoading(prev => ({ ...prev, barangays: true }));
     void fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces/${encodeURIComponent(selectedProvince)}/municipalities/${encodeURIComponent(selectedMunicipality)}/barangays`)
-      .then(setBarangays)
-      .catch(() => setBarangays([]))
-      .finally(() => setLoading(prev => ({ ...prev, barangays: false })));
+      .then(data => { if (gen === geoGen.current) setBarangays(data); })
+      .catch(() => { if (gen === geoGen.current) setBarangays([]); })
+      .finally(() => { if (gen === geoGen.current) setLoading(prev => ({ ...prev, barangays: false })); });
   }, [selectedMunicipality, selectedProvince, selectedRegion]);
 
   useEffect(() => {
     if (!selectedBarangay) { setVotingCenters([]); setSelectedVC(''); return; }
+    const gen = ++geoGen.current;
     setLoading(prev => ({ ...prev, vcs: true }));
     const vcParams = new URLSearchParams({
       reg: selectedRegion,
@@ -148,10 +154,10 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
       mun: selectedMunicipality,
     });
     void fetchJson(`${API}/barangays/${encodeURIComponent(selectedBarangay)}/voting-centers?${vcParams}`)
-      .then(setVotingCenters)
-      .catch(() => setVotingCenters([]))
-      .finally(() => setLoading(prev => ({ ...prev, vcs: false })));
-  }, [selectedBarangay]);
+      .then(data => { if (gen === geoGen.current) setVotingCenters(data); })
+      .catch(() => { if (gen === geoGen.current) setVotingCenters([]); })
+      .finally(() => { if (gen === geoGen.current) setLoading(prev => ({ ...prev, vcs: false })); });
+  }, [selectedBarangay, selectedRegion, selectedProvince, selectedMunicipality]);
 
   useEffect(() => {
     if (!selectedContest && selectedCategory !== 'All') return;
