@@ -1,7 +1,8 @@
-import { Controller, Get, Param, Query, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Controller, Get, Param, Query, UsePipes, ValidationPipe, BadRequestException } from '@nestjs/common';
 import { ResultsService } from './results.service';
 import { ResultQueryDto } from './dto/result-query.dto';
 import { ResultsResponse } from './dto/results-response.dto';
+import { ContestInfo } from './dto/contest-info.dto';
 
 @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
 @Controller('api')
@@ -45,14 +46,26 @@ export class ResultsController {
   }
 
   @Get('barangays/:brgy/voting-centers')
-  getVotingCenters(@Param('brgy') brgy: string): string[] {
-    return this.resultsService.getDistinctValues('precinct', 'pollplace', {
-      brgy_name: brgy,
-    });
+  getVotingCenters(
+    @Param('brgy') brgy: string,
+    @Query('reg') reg?: string,
+    @Query('prv') prv?: string,
+    @Query('mun') mun?: string,
+  ): string[] {
+    if (!reg || !prv || !mun) {
+      throw new BadRequestException('voting-centers requires reg, prv, and mun query params');
+    }
+    const parents: Record<string, string> = { brgy_name: brgy, reg_name: reg, prv_name: prv, mun_name: mun };
+    return this.resultsService.getDistinctValues('precinct', 'pollplace', parents);
   }
 
   @Get('contests')
-  getContests(): { code: string; name: string }[] {
-    return this.resultsService.getContests();
+  getContests(
+    @Query('reg') reg?: string,
+    @Query('prv') prv?: string,
+    @Query('mun') mun?: string,
+    @Query('brgy') brgy?: string,
+  ): ContestInfo[] {
+    return this.resultsService.getContestsByGeography({ reg, prv, mun, brgy });
   }
 }

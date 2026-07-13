@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsIn } from 'class-validator';
+import { IsOptional, IsString, IsIn, Matches } from 'class-validator';
 
 export class ResultQueryDto {
   @IsString()
@@ -27,5 +27,10 @@ export class ResultQueryDto {
 
   @IsOptional()
   @IsString()
+  @Matches(/^\d+$/, { message: 'contest must be a numeric code' })
   contest?: string;
+
+  @IsOptional()
+  @IsIn(['true'])
+  national_only?: string; // 'true' or undefined
 }
