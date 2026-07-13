@@ -20,20 +20,6 @@ const CATEGORY_MAP: Record<string, string> = {
   '014': 'BARMM Parliament',
 };
 
-const CATEGORY_ORDER: Record<string, number> = {
-  'Senator': 1,
-  'Party List': 2,
-  'Governor': 3,
-  'Vice Governor': 4,
-  'House of Reps': 5,
-  'Provincial Board': 6,
-  'Mayor': 7,
-  'Vice Mayor': 8,
-  'Councilor': 9,
-  'BARMM Party Rep': 10,
-  'BARMM Parliament': 11,
-};
-
 interface ContestQueryParams {
   reg?: string;
   prv?: string;
@@ -100,24 +86,17 @@ export class ResultsService {
     };
   }
 
-  getContests(): { code: string; name: string }[] {
-    const sql = `SELECT DISTINCT contest_code FROM '${this.parquetBase}/national/**/*.parquet' ORDER BY contest_code`;
-    const output = execSync(`duckdb -json -c "${sql}"`, { encoding: 'utf-8' });
-    const rows = JSON.parse(output) as any[];
-    return rows.map(r => ({ code: r.contest_code, name: r.contest_code }));
-  }
-
   getContestsByGeography(params: ContestQueryParams): ContestInfo[] {
     const { sql } = this.buildContestQuery(params);
     const output = execSync(`duckdb -json -c "${sql}"`, {
       encoding: 'utf-8',
       maxBuffer: 10 * 1024 * 1024,
     });
-    const rows = JSON.parse(output) as { contest_code: string }[];
+    const rows = JSON.parse(output) as { contest_code: string | number }[];
 
     return rows.map(r => ({
-      code: r.contest_code,
-      name: this.contestNames[r.contest_code] || r.contest_code,
+      code: String(r.contest_code),
+      name: this.contestNames[String(r.contest_code)] || String(r.contest_code),
       category: this.categoryFromCode(r.contest_code),
     }));
   }
@@ -168,8 +147,8 @@ export class ResultsService {
     return rows.map(r => r[column]).filter(Boolean);
   }
 
-  private categoryFromCode(contestCode: string): string {
-    const prefix = contestCode.slice(0, 3);
+  private categoryFromCode(contestCode: string | number): string {
+    const prefix = String(contestCode).slice(0, 3);
     return CATEGORY_MAP[prefix] || 'Unknown';
   }
 
