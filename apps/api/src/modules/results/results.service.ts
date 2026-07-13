@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -32,6 +32,16 @@ function padContestCode(code: string | number): string {
   return String(code).padStart(8, '0');
 }
 
+/** Strip leading zeros and parse as integer. */
+function cleanContestCode(code: string): number {
+  return parseInt(code, 10) || 0;
+}
+
+/** Escape single quotes for DuckDB SQL string literals. */
+function esc(val: string): string {
+  return val.replace(/'/g, "''");
+}
+
 @Injectable()
 export class ResultsService {
   private readonly parquetBase: string;
@@ -41,7 +51,7 @@ export class ResultsService {
     // Default: resolve relative to project root (2 levels up from apps/api/)
     this.parquetBase =
       process.env.PARQUET_BASE_PATH ||
-      path.resolve(__dirname, '..', '..', '..', '..', '..', 'output', 'multi-level');
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'output');
 
     try {
       const namesPath = path.resolve(__dirname, '..', '..', '..', '..', '..', 'data', 'contest-names.json');
@@ -130,24 +140,41 @@ export class ResultsService {
     const filters: string[] = [];
     let level = 'national';
 
-    if (params.brgy && params.mun && params.prv && params.reg) {
+    // M4: Validate partial geo params — reject incomplete ancestor chains
+    if (params.brgy && (!params.mun || !params.prv || !params.reg)) {
+      throw new BadRequestException(
+        'barangay filter requires mun, prv, and reg params',
+      );
+    }
+    if (params.mun && (!params.prv || !params.reg)) {
+      throw new BadRequestException(
+        'municipality filter requires prv and reg params',
+      );
+    }
+    if (params.prv && !params.reg) {
+      throw new BadRequestException(
+        'province filter requires reg param',
+      );
+    }
+
+    if (params.brgy) {
       level = 'barangay';
-      filters.push(`brgy_name = '${params.brgy.replace(/'/g, "''")}'`);
-      filters.push(`mun_name = '${params.mun.replace(/'/g, "''")}'`);
-      filters.push(`prv_name = '${params.prv.replace(/'/g, "''")}'`);
-      filters.push(`reg_name = '${params.reg.replace(/'/g, "''")}'`);
-    } else if (params.mun && params.prv && params.reg) {
+      filters.push(`brgy_name = '${esc(params.brgy)}'`);
+      filters.push(`mun_name = '${esc(params.mun!)}'`);
+      filters.push(`prv_name = '${esc(params.prv!)}'`);
+      filters.push(`reg_name = '${esc(params.reg!)}'`);
+    } else if (params.mun) {
       level = 'municipality';
-      filters.push(`mun_name = '${params.mun.replace(/'/g, "''")}'`);
-      filters.push(`prv_name = '${params.prv.replace(/'/g, "''")}'`);
-      filters.push(`reg_name = '${params.reg.replace(/'/g, "''")}'`);
-    } else if (params.prv && params.reg) {
+      filters.push(`mun_name = '${esc(params.mun)}'`);
+      filters.push(`prv_name = '${esc(params.prv!)}'`);
+      filters.push(`reg_name = '${esc(params.reg!)}'`);
+    } else if (params.prv) {
       level = 'province';
-      filters.push(`prv_name = '${params.prv.replace(/'/g, "''")}'`);
-      filters.push(`reg_name = '${params.reg.replace(/'/g, "''")}'`);
+      filters.push(`prv_name = '${esc(params.prv)}'`);
+      filters.push(`reg_name = '${esc(params.reg!)}'`);
     } else if (params.reg) {
       level = 'region';
-      filters.push(`reg_name = '${params.reg.replace(/'/g, "''")}'`);
+      filters.push(`reg_name = '${esc(params.reg)}'`);
     }
 
     const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
@@ -162,7 +189,7 @@ export class ResultsService {
   getDistinctValues(level: string, column: string, parents?: Record<string, string>): string[] {
     const whereClause = parents && Object.keys(parents).length > 0
       ? 'WHERE ' + Object.entries(parents)
-          .map(([k, v]) => `${k} = '${v.replace(/'/g, "''")}'`)
+          .map(([k, v]) => `${k} = '${esc(v)}'`)
           .join(' AND ')
       : '';
 
@@ -182,12 +209,19 @@ export class ResultsService {
     const glob = `${this.parquetBase}/${level}/**/*.parquet`;
 
     const where: string[] = [];
-    if (dto.contest) where.push(`contest_code = '${dto.contest.replace(/'/g, "''")}'`);
-    if (dto.reg) where.push(`reg_name = '${dto.reg.replace(/'/g, "''")}'`);
-    if (dto.prv) where.push(`prv_name = '${dto.prv.replace(/'/g, "''")}'`);
-    if (dto.mun) where.push(`mun_name = '${dto.mun.replace(/'/g, "''")}'`);
-    if (dto.brgy) where.push(`brgy_name = '${dto.brgy.replace(/'/g, "''")}'`);
-    if (dto.vc) where.push(`pollplace = '${dto.vc.replace(/'/g, "''")}'`);
+    if (dto.nationalOnly === 'true') {
+      where.push(
+        "(LPAD(CAST(contest_code AS VARCHAR), 8, '0') LIKE '003%'"
+        + " OR LPAD(CAST(contest_code AS VARCHAR), 8, '0') LIKE '011%')"
+      );
+    }
+    // M1: Compare contest_code as integer (strip leading zeros)
+    if (dto.contest) where.push(`contest_code = ${cleanContestCode(dto.contest)}`);
+    if (dto.reg) where.push(`reg_name = '${esc(dto.reg)}'`);
+    if (dto.prv) where.push(`prv_name = '${esc(dto.prv)}'`);
+    if (dto.mun) where.push(`mun_name = '${esc(dto.mun)}'`);
+    if (dto.brgy) where.push(`brgy_name = '${esc(dto.brgy)}'`);
+    if (dto.vc) where.push(`pollplace = '${esc(dto.vc)}'`);
 
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
 
