@@ -2,6 +2,7 @@ import { Controller, Get, Param, Query, UsePipes, ValidationPipe } from '@nestjs
 import { ResultsService } from './results.service';
 import { ResultQueryDto } from './dto/result-query.dto';
 import { ResultsResponse } from './dto/results-response.dto';
+import { ContestInfo } from './dto/contest-info.dto';
 
 @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
 @Controller('api')
@@ -52,7 +53,12 @@ export class ResultsController {
   }
 
   @Get('contests')
-  getContests(): { code: string; name: string }[] {
-    return this.resultsService.getContests();
+  getContests(
+    @Query('reg') reg?: string,
+    @Query('prv') prv?: string,
+    @Query('mun') mun?: string,
+    @Query('brgy') brgy?: string,
+  ): ContestInfo[] {
+    return this.resultsService.getContestsByGeography({ reg, prv, mun, brgy });
   }
 }

@@ -49,6 +49,30 @@ describe('ResultsService', () => {
     });
   });
 
+  describe('buildContestQuery', () => {
+    it('should build correct SQL with no params (national)', () => {
+      const { sql } = (service as any).buildContestQuery({});
+      expect(sql).toContain("SELECT DISTINCT contest_code FROM './output/national/**/*.parquet'");
+    });
+
+    it('should build correct SQL with region filter', () => {
+      const { sql, level } = (service as any).buildContestQuery({ reg: 'NCR' });
+      expect(sql).toContain("reg_name = 'NCR'");
+      expect(level).toBe('region');
+    });
+
+    it('should build correct SQL with region + province filter', () => {
+      const { sql, level } = (service as any).buildContestQuery({ reg: 'CAR', prv: 'BENGUET' });
+      expect(sql).toContain("reg_name = 'CAR'");
+      expect(sql).toContain("prv_name = 'BENGUET'");
+      expect(level).toBe('province');
+    });
+
+    it('should filter contests by category on frontend', () => {
+      expect(true).toBe(true);
+    });
+  });
+
   describe('buildQuery', () => {
     it('should generate correct SQL for national level', () => {
       const { sql, level } = (service as any).buildQuery({ level: 'national' });

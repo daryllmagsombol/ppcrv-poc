@@ -34,6 +34,13 @@ const CATEGORY_ORDER: Record<string, number> = {
   'BARMM Parliament': 11,
 };
 
+interface ContestQueryParams {
+  reg?: string;
+  prv?: string;
+  mun?: string;
+  brgy?: string;
+}
+
 @Injectable()
 export class ResultsService {
   private readonly parquetBase: string;
@@ -98,6 +105,54 @@ export class ResultsService {
     const output = execSync(`duckdb -json -c "${sql}"`, { encoding: 'utf-8' });
     const rows = JSON.parse(output) as any[];
     return rows.map(r => ({ code: r.contest_code, name: r.contest_code }));
+  }
+
+  getContestsByGeography(params: ContestQueryParams): ContestInfo[] {
+    const { sql } = this.buildContestQuery(params);
+    const output = execSync(`duckdb -json -c "${sql}"`, {
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    const rows = JSON.parse(output) as { contest_code: string }[];
+
+    return rows.map(r => ({
+      code: r.contest_code,
+      name: this.contestNames[r.contest_code] || r.contest_code,
+      category: this.categoryFromCode(r.contest_code),
+    }));
+  }
+
+  private buildContestQuery(params: ContestQueryParams): { sql: string; level: string } {
+    const filters: string[] = [];
+    let level = 'national';
+
+    if (params.brgy && params.mun && params.prv && params.reg) {
+      level = 'barangay';
+      filters.push(`brgy_name = '${params.brgy.replace(/'/g, "''")}'`);
+      filters.push(`mun_name = '${params.mun.replace(/'/g, "''")}'`);
+      filters.push(`prv_name = '${params.prv.replace(/'/g, "''")}'`);
+      filters.push(`reg_name = '${params.reg.replace(/'/g, "''")}'`);
+    } else if (params.mun && params.prv && params.reg) {
+      level = 'municipality';
+      filters.push(`mun_name = '${params.mun.replace(/'/g, "''")}'`);
+      filters.push(`prv_name = '${params.prv.replace(/'/g, "''")}'`);
+      filters.push(`reg_name = '${params.reg.replace(/'/g, "''")}'`);
+    } else if (params.prv && params.reg) {
+      level = 'province';
+      filters.push(`prv_name = '${params.prv.replace(/'/g, "''")}'`);
+      filters.push(`reg_name = '${params.reg.replace(/'/g, "''")}'`);
+    } else if (params.reg) {
+      level = 'region';
+      filters.push(`reg_name = '${params.reg.replace(/'/g, "''")}'`);
+    }
+
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+    const glob = `${this.parquetBase}/${level}/**/*.parquet`;
+
+    const sql = `SELECT DISTINCT contest_code FROM '${glob}' ${whereClause} ORDER BY contest_code`
+      .trim().replace(/\s+/g, ' ');
+
+    return { sql, level };
   }
 
   getDistinctValues(level: string, column: string, parents?: Record<string, string>): string[] {

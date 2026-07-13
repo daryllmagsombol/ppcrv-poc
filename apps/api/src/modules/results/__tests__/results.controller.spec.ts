@@ -9,6 +9,7 @@ describe('ResultsController', () => {
   const mockService = {
     queryResults: jest.fn(),
     getDistinctValues: jest.fn(),
+    getContestsByGeography: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -36,5 +37,25 @@ describe('ResultsController', () => {
     const result = controller.getRegions();
     expect(result).toEqual(['NCR', 'CAR']);
     expect(mockService.getDistinctValues).toHaveBeenCalledWith('region', 'reg_name');
+  });
+
+  it('GET /api/contests should call service.getContestsByGeography with query params', () => {
+    mockService.getContestsByGeography = jest.fn().mockReturnValue([
+      { code: '00399000', name: 'SENATOR OF PHILIPPINES', category: 'Senator' },
+    ]);
+    const result = controller.getContests('NCR', 'METRO MANILA', undefined, undefined);
+    expect(mockService.getContestsByGeography).toHaveBeenCalledWith({
+      reg: 'NCR',
+      prv: 'METRO MANILA',
+    });
+    expect(result).toEqual([
+      { code: '00399000', name: 'SENATOR OF PHILIPPINES', category: 'Senator' },
+    ]);
+  });
+
+  it('GET /api/contests should work with no params', () => {
+    mockService.getContestsByGeography = jest.fn().mockReturnValue([]);
+    const result = controller.getContests();
+    expect(mockService.getContestsByGeography).toHaveBeenCalledWith({});
   });
 });
