@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ResultQueryDto } from './dto/result-query.dto';
@@ -64,7 +64,7 @@ export class ResultsService {
   queryResults(dto: ResultQueryDto): ResultsResponse {
     const { sql, level } = this.buildQuery(dto);
 
-    const output = execSync(`duckdb -json -c "${sql}"`, {
+    const output = execFileSync('duckdb', ['-json', '-c', sql], {
       encoding: 'utf-8',
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -120,7 +120,7 @@ export class ResultsService {
 
   getContestsByGeography(params: ContestQueryParams): ContestInfo[] {
     const { sql } = this.buildContestQuery(params);
-    const output = execSync(`duckdb -json -c "${sql}"`, {
+    const output = execFileSync('duckdb', ['-json', '-c', sql], {
       encoding: 'utf-8',
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -194,7 +194,7 @@ export class ResultsService {
       : '';
 
     const sql = `SELECT DISTINCT ${column} FROM '${this.parquetBase}/${level}/**/*.parquet' ${whereClause} ORDER BY ${column}`;
-    const output = execSync(`duckdb -json -c "${sql}"`, { encoding: 'utf-8' });
+    const output = execFileSync('duckdb', ['-json', '-c', sql], { encoding: 'utf-8' });
     const rows = JSON.parse(output) as any[];
     return rows.map(r => r[column]).filter(Boolean);
   }

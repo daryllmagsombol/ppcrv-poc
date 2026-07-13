@@ -30,6 +30,6 @@ export class ResultQueryDto {
   contest?: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(['true'])
   national_only?: string; // 'true' or undefined
 }
