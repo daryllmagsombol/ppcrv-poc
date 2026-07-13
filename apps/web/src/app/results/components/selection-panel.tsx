@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { CascadingDropdown } from './cascading-dropdown';
 
 interface SelectionPanelProps {
@@ -21,6 +21,11 @@ interface ContestInfo {
   category: string;
 }
 
+const CATEGORY_ORDER = [
+  'All','Senator','Party List','Governor','Vice Governor','House of Reps',
+  'Provincial Board','Mayor','Vice Mayor','Councilor','BARMM Party Rep','BARMM Parliament',
+];
+
 export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
   const [regions, setRegions] = useState<string[]>([]);
   const [provinces, setProvinces] = useState<string[]>([]);
@@ -29,7 +34,8 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
   const [votingCenters, setVotingCenters] = useState<string[]>([]);
   const [contestInfos, setContestInfos] = useState<ContestInfo[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [loadingContests, setLoadingContests] = useState(false);
 
   const [selectedRegion, setSelectedRegion] = useState('');
   const [selectedProvince, setSelectedProvince] = useState('');
@@ -48,24 +54,28 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
 
   const [collapsed, setCollapsed] = useState(false);
 
+  // C1: Generation counter to discard stale fetchContests responses
+  const fetchGen = useRef(0);
+
   useEffect(() => {
     setLoading(prev => ({ ...prev, regions: true }));
-    fetchJson(`${API}/regions`)
+    void fetchJson(`${API}/regions`)
       .then(setRegions)
       .catch(() => setRegions([]))
       .finally(() => setLoading(prev => ({ ...prev, regions: false })));
   }, []);
 
   const fetchContests = useCallback(async (geo: Record<string, string>) => {
+    const gen = ++fetchGen.current;
+    setLoadingContests(true);
     const params = new URLSearchParams(geo);
     const url = params.toString() ? `${API}/contests?${params}` : `${API}/contests`;
     try {
       const data: ContestInfo[] = await fetchJson(url);
-      const catOrder = ['Senator','Party List','Governor','Vice Governor','House of Reps',
-        'Provincial Board','Mayor','Vice Mayor','Councilor','BARMM Party Rep','BARMM Parliament'];
+      if (gen !== fetchGen.current) return; // stale response, discard
       const seen = new Set<string>();
       const cats: string[] = [];
-      for (const cat of catOrder) {
+      for (const cat of CATEGORY_ORDER) {
         if (data.some(c => c.category === cat) && !seen.has(cat)) {
           seen.add(cat);
           cats.push(cat);
@@ -74,32 +84,38 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
       setContestInfos(data);
       setCategories(cats);
       setSelectedCategory(prev => {
+        if (prev === 'All' && cats.length > 0) return 'All';
         if (cats.includes(prev)) return prev;
         return cats.length > 0 ? cats[0] : '';
       });
     } catch {
+      if (gen !== fetchGen.current) return;
       setContestInfos([]);
       setCategories([]);
       setSelectedCategory('');
+    } finally {
+      if (gen === fetchGen.current) setLoadingContests(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchContests({});
+    void fetchContests({});
   }, [fetchContests]);
 
   // Auto-select if only one contest in category
   useEffect(() => {
+    if (selectedCategory === 'All') return;
     const filtered = contestInfos.filter(c => c.category === selectedCategory);
     if (filtered.length === 1 && selectedContest !== filtered[0].code) {
       setSelectedContest(filtered[0].code);
     }
-  }, [selectedCategory, contestInfos]);
+  }, [selectedCategory, contestInfos, selectedContest]);
 
+  // M3: Add all referenced deps to geography effects
   useEffect(() => {
     if (!selectedRegion) { setProvinces([]); setSelectedProvince(''); return; }
     setLoading(prev => ({ ...prev, provinces: true }));
-    fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces`)
+    void fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces`)
       .then(setProvinces)
       .catch(() => setProvinces([]))
       .finally(() => setLoading(prev => ({ ...prev, provinces: false })));
@@ -108,35 +124,45 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
   useEffect(() => {
     if (!selectedProvince) { setMunicipalities([]); setSelectedMunicipality(''); return; }
     setLoading(prev => ({ ...prev, municipalities: true }));
-    fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces/${encodeURIComponent(selectedProvince)}/municipalities`)
+    void fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces/${encodeURIComponent(selectedProvince)}/municipalities`)
       .then(setMunicipalities)
       .catch(() => setMunicipalities([]))
       .finally(() => setLoading(prev => ({ ...prev, municipalities: false })));
-  }, [selectedProvince]);
+  }, [selectedProvince, selectedRegion]);
 
   useEffect(() => {
     if (!selectedMunicipality) { setBarangays([]); setSelectedBarangay(''); return; }
     setLoading(prev => ({ ...prev, barangays: true }));
-    fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces/${encodeURIComponent(selectedProvince)}/municipalities/${encodeURIComponent(selectedMunicipality)}/barangays`)
+    void fetchJson(`${API}/regions/${encodeURIComponent(selectedRegion)}/provinces/${encodeURIComponent(selectedProvince)}/municipalities/${encodeURIComponent(selectedMunicipality)}/barangays`)
       .then(setBarangays)
       .catch(() => setBarangays([]))
       .finally(() => setLoading(prev => ({ ...prev, barangays: false })));
-  }, [selectedMunicipality]);
+  }, [selectedMunicipality, selectedProvince, selectedRegion]);
 
   useEffect(() => {
     if (!selectedBarangay) { setVotingCenters([]); setSelectedVC(''); return; }
     setLoading(prev => ({ ...prev, vcs: true }));
-    fetchJson(`${API}/barangays/${encodeURIComponent(selectedBarangay)}/voting-centers`)
+    void fetchJson(`${API}/barangays/${encodeURIComponent(selectedBarangay)}/voting-centers`)
       .then(setVotingCenters)
       .catch(() => setVotingCenters([]))
       .finally(() => setLoading(prev => ({ ...prev, vcs: false })));
   }, [selectedBarangay]);
 
+  // m1: Add onSelectionChange to deps
   useEffect(() => {
+    if (!selectedContest && selectedCategory !== 'All') return;
+
     const filters: Record<string, string> = {};
-    
-    if (selectedContest) filters.contest = selectedContest;
-    
+
+    if (selectedContest) {
+      filters.contest = selectedContest;
+    } else if (selectedCategory === 'All') {
+      // When "All" is active with no geography, only show national contests
+      if (!selectedRegion && !selectedProvince && !selectedMunicipality && !selectedBarangay && !selectedVC) {
+        filters.national_only = 'true';
+      }
+    }
+
     if (selectedVC) {
       filters.level = 'precinct';
       filters.vc = selectedVC;
@@ -157,7 +183,7 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
     }
 
     onSelectionChange(filters);
-  }, [selectedRegion, selectedProvince, selectedMunicipality, selectedBarangay, selectedVC, selectedContest]);
+  }, [selectedRegion, selectedProvince, selectedMunicipality, selectedBarangay, selectedVC, selectedContest, selectedCategory, onSelectionChange]);
 
   return (
     <div className="rounded border border-gray-200 bg-[#F8F6F0]">
@@ -166,7 +192,8 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
         className="flex w-full items-center justify-between bg-[#1B3A5C] px-4 py-3 text-sm font-semibold uppercase tracking-wider text-[#F8F6F0]"
       >
         <span>SELECTION</span>
-        <span className="transition-transform" style={{ transform: collapsed ? 'rotate(-90deg)' : 'rotate(0)' }}>
+        {/* m6: Use Tailwind classes instead of inline style */}
+        <span className={`transition-transform duration-200 ${collapsed ? '-rotate-90' : 'rotate-0'}`}>
           ▼
         </span>
       </button>
@@ -183,7 +210,7 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
               setSelectedBarangay('');
               setSelectedVC('');
               setSelectedContest('');
-              fetchContests({ reg: e.target.value });
+              void fetchContests({ reg: e.target.value });
             }}
             loading={loading.regions}
           />
@@ -197,7 +224,7 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
               setSelectedBarangay('');
               setSelectedVC('');
               setSelectedContest('');
-              fetchContests({ reg: selectedRegion, prv: e.target.value });
+              void fetchContests({ reg: selectedRegion, prv: e.target.value });
             }}
             disabled={!selectedRegion}
             loading={loading.provinces}
@@ -211,7 +238,7 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
               setSelectedBarangay('');
               setSelectedVC('');
               setSelectedContest('');
-              fetchContests({ reg: selectedRegion, prv: selectedProvince, mun: e.target.value });
+              void fetchContests({ reg: selectedRegion, prv: selectedProvince, mun: e.target.value });
             }}
             disabled={!selectedProvince}
             loading={loading.municipalities}
@@ -224,7 +251,7 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
               setSelectedBarangay(e.target.value);
               setSelectedVC('');
               setSelectedContest('');
-              fetchContests({ reg: selectedRegion, prv: selectedProvince, mun: selectedMunicipality, brgy: e.target.value });
+              void fetchContests({ reg: selectedRegion, prv: selectedProvince, mun: selectedMunicipality, brgy: e.target.value });
             }}
             disabled={!selectedMunicipality}
             loading={loading.barangays}
@@ -233,7 +260,11 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
             label="VOTING CENTER"
             options={votingCenters.map(v => ({ value: v, label: v }))}
             value={selectedVC}
-            onChange={(e) => setSelectedVC(e.target.value)}
+            // M2: Clear selectedContest on VC change (consistent with other handlers)
+            onChange={(e) => {
+              setSelectedVC(e.target.value);
+              setSelectedContest('');
+            }}
             disabled={!selectedBarangay}
             loading={loading.vcs}
           />
@@ -261,16 +292,20 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
               ))}
             </div>
           )}
-          <CascadingDropdown
-            label="CONTEST"
-            options={contestInfos
-              .filter(c => c.category === selectedCategory || !selectedCategory)
-              .map(c => ({ value: c.code, label: c.name }))}
-            value={selectedContest}
-            onChange={(e) => setSelectedContest(e.target.value)}
-            disabled={contestInfos.length === 0}
-            placeholder="Select Contest"
-          />
+          {selectedCategory !== 'All' && (
+            <CascadingDropdown
+              // m2: Add loading visual for contest dropdown
+              label="CONTEST"
+              options={contestInfos
+                .filter(c => c.category === selectedCategory || !selectedCategory)
+                .map(c => ({ value: c.code, label: c.name }))}
+              value={selectedContest}
+              onChange={(e) => setSelectedContest(e.target.value)}
+              disabled={contestInfos.length === 0 && !loadingContests}
+              loading={loadingContests}
+              placeholder={loadingContests ? 'Loading...' : 'Select Contest'}
+            />
+          )}
         </div>
       )}
     </div>
