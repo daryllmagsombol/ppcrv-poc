@@ -111,7 +111,6 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
     }
   }, [selectedCategory, contestInfos, selectedContest]);
 
-  // M3: Add all referenced deps to geography effects
   useEffect(() => {
     if (!selectedRegion) { setProvinces([]); setSelectedProvince(''); return; }
     setLoading(prev => ({ ...prev, provinces: true }));
@@ -148,7 +147,6 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
       .finally(() => setLoading(prev => ({ ...prev, vcs: false })));
   }, [selectedBarangay]);
 
-  // m1: Add onSelectionChange to deps
   useEffect(() => {
     if (!selectedContest && selectedCategory !== 'All') return;
 
@@ -294,7 +292,6 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
           )}
           {selectedCategory !== 'All' && (
             <CascadingDropdown
-              // m2: Add loading visual for contest dropdown
               label="CONTEST"
               options={contestInfos
                 .filter(c => c.category === selectedCategory || !selectedCategory)

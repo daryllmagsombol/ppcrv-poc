@@ -100,7 +100,7 @@ describe('ResultsService', () => {
     it('should add national_only filter for Senator and Party List', () => {
       const { sql } = (service as any).buildQuery({
         level: 'national',
-        nationalOnly: 'true',
+        national_only: 'true',
       });
       expect(sql).toContain("LIKE '003%'");
       expect(sql).toContain("LIKE '011%'");

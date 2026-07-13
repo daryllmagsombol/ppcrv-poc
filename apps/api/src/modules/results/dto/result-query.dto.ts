@@ -31,5 +31,5 @@ export class ResultQueryDto {
 
   @IsOptional()
   @IsString()
-  nationalOnly?: string; // 'true' or undefined — mapped from query param national_only
+  national_only?: string; // 'true' or undefined
 }

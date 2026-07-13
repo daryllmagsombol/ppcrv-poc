@@ -209,7 +209,7 @@ export class ResultsService {
     const glob = `${this.parquetBase}/${level}/**/*.parquet`;
 
     const where: string[] = [];
-    if (dto.nationalOnly === 'true') {
+    if (dto.national_only === 'true') {
       where.push(
         "(LPAD(CAST(contest_code AS VARCHAR), 8, '0') LIKE '003%'"
         + " OR LPAD(CAST(contest_code AS VARCHAR), 8, '0') LIKE '011%')"
