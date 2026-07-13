@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Controller, Get, Param, Query, UsePipes, ValidationPipe, BadRequestException } from '@nestjs/common';
 import { ResultsService } from './results.service';
 import { ResultQueryDto } from './dto/result-query.dto';
 import { ResultsResponse } from './dto/results-response.dto';
@@ -48,10 +48,13 @@ export class ResultsController {
   @Get('barangays/:brgy/voting-centers')
   getVotingCenters(
     @Param('brgy') brgy: string,
-    @Query('reg') reg: string,
-    @Query('prv') prv: string,
-    @Query('mun') mun: string,
+    @Query('reg') reg?: string,
+    @Query('prv') prv?: string,
+    @Query('mun') mun?: string,
   ): string[] {
+    if (!reg || !prv || !mun) {
+      throw new BadRequestException('voting-centers requires reg, prv, and mun query params');
+    }
     const parents: Record<string, string> = { brgy_name: brgy, reg_name: reg, prv_name: prv, mun_name: mun };
     return this.resultsService.getDistinctValues('precinct', 'pollplace', parents);
   }
