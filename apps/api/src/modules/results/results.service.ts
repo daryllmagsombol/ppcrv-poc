@@ -27,6 +27,11 @@ interface ContestQueryParams {
   brgy?: string;
 }
 
+function padContestCode(code: string | number): string {
+  // DuckDB returns contest_code as a number (399000), but JSON map uses 8-digit keys (00399000)
+  return String(code).padStart(8, '0');
+}
+
 @Injectable()
 export class ResultsService {
   private readonly parquetBase: string;
@@ -56,10 +61,10 @@ export class ResultsService {
 
     const rows = JSON.parse(output) as any[];
 
-    // Group rows by contest_code
+    // Group rows by contest_code (padded to 8 digits for JSON map lookup)
     const contestMap = new Map<string, any[]>();
     for (const r of rows) {
-      const code = String(r.contest_code);
+      const code = padContestCode(r.contest_code);
       if (!contestMap.has(code)) contestMap.set(code, []);
       contestMap.get(code)!.push(r);
     }
@@ -111,11 +116,14 @@ export class ResultsService {
     });
     const rows = JSON.parse(output) as { contest_code: string | number }[];
 
-    return rows.map(r => ({
-      code: String(r.contest_code),
-      name: this.contestNames[String(r.contest_code)] || String(r.contest_code),
-      category: this.categoryFromCode(r.contest_code),
-    }));
+    return rows.map(r => {
+      const code = padContestCode(r.contest_code);
+      return {
+        code,
+        name: this.contestNames[code] || code,
+        category: this.categoryFromCode(code),
+      };
+    });
   }
 
   private buildContestQuery(params: ContestQueryParams): { sql: string; level: string } {
