@@ -978,7 +978,7 @@ pip install duckdb pytest            # Python ETL deps
 python3 scripts/run_aggregation.py \
   sample-csv/results.csv \
   sample-csv/precincts.csv \
-  output/multi-level --sample 100000  # Generate Parquet data
+  output --sample 100000  # Generate Parquet data (omit --sample for full 24M rows)
 pnpm dev                            # Start API (3001) + Web (3000)
 ```
 

@@ -11,7 +11,40 @@ Postgres (`psycopg2-binary`) is only needed for loading reference data — the c
 
 ---
 
-## 1. Run Tests
+## 1. Aggregate CSV → Parquet (6 Geographic Levels)
+
+The multi-level aggregator reads results + precincts CSVs, joins on precinct code, and aggregates votes at 6 levels:
+
+```bash
+python3 scripts/run_aggregation.py sample-csv/results.csv sample-csv/precincts.csv output/
+```
+
+**Output:** `output/national/`, `output/region/`, `output/province/`, `output/municipality/`, `output/barangay/`, `output/precinct/` — each Hive-partitioned by `contest_code`.
+
+### Sample mode (fast dev iteration)
+
+```bash
+python3 scripts/run_aggregation.py sample-csv/results.csv sample-csv/precincts.csv output/ --sample 100000
+```
+
+### Performance notes
+
+| Dataset | Time | Memory |
+|---------|------|--------|
+| Full 24M rows, 1.14B votes, 6 levels | ~1 min 40 s | ~6 GB |
+| Sample 100K rows | ~5 s | Minimal |
+
+The aggregator streams CSV→JOIN→GROUP BY→Parquet without materializing intermediate tables. Each level gets its own DuckDB connection so memory is freed between levels.
+
+Memory tuning (set in `aggregator.py`):
+- `SET memory_limit='6GB'`
+- `SET threads=2`
+- `SET preserve_insertion_order=false`
+- `SET temp_directory='<output>/\_duckdb_temp'`
+
+---
+
+## 2. Run Tests
 
 ```bash
 pytest tests/etl/ -v
@@ -25,37 +58,16 @@ pytest tests/etl/ -v
 | `test_output_is_valid_parquet` | Parquet files readable with correct columns |
 | `test_idempotent_output` | Same input → byte-identical output |
 | `test_real_results_csv` | Real-data sample (4 rows, 4 candidates → SUM=883, 1 precinct) |
-
----
-
-## 2. Aggregate CSV → Parquet
-
-```python
-from src.etl.processor import parse_and_aggregate
-
-# Synthetic fixtures (you know the expected totals)
-result = parse_and_aggregate("tests/etl/fixtures/multiple.csv", "output/")
-print(result)
-# AggregationResult(total_votes=1640, precinct_count=3, contest_count=2, ...)
-
-# Real data
-result = parse_and_aggregate("sample-csv/results.csv", "output/")
-print(result)
-```
-
-One-liner:
-```bash
-python3 -c "from src.etl.processor import parse_and_aggregate; print(parse_and_aggregate('sample-csv/results.csv', 'output/'))"
-```
+| `test_sample_mode` | `sample=5` → only 5 rows processed |
+| `test_invalid_precinct_join` | 0% precinct match → no crash, 0 votes |
+| `test_no_duplicate_rows_multi_level` | Duplicate rows → only aggregated once |
+| `test_full_multi_level_happy_path` | 5 rows, 2 precincts, 2 contests → checks all 6 levels |
 
 ---
 
 ## 3. Inspect Parquet Output
 
-The Parquet files store per-candidate totals (from the aggregation step).  
-Both commands read the same files — the summary just rolls them up by contest.
-
-### Quick summary (fast — one pass over all partitions)
+### Quick summary (fast — one pass)
 
 ```bash
 python3 -c "
@@ -63,7 +75,7 @@ import duckdb
 con = duckdb.connect()
 for row in con.execute(\"\"\"
     SELECT contest_code, COUNT(*) AS rows, SUM(total_votes) AS votes
-    FROM read_parquet('output/**/*.parquet')
+    FROM read_parquet('output/national/**/*.parquet')
     GROUP BY contest_code ORDER BY contest_code
 \"\"\").fetchall():
     print(f'  contest={row[0]:>10}  rows={row[1]:>6}  votes={row[2]:>10}')
@@ -71,59 +83,71 @@ con.close()
 "
 ```
 
-Example output:
-```
-  contest=   1010010  rows=     4  votes=     883.0
-  contest=   1054160  rows=  5019  votes= 1270503.0
-  contest=   1199000  rows=14385240  votes=41658790.0
-  ...
-```
-
-### Peek at a sample (first 3 partitions)
+### Check a specific level
 
 ```bash
-python3 -c "
-import duckdb, glob
-con = duckdb.connect()
-dirs = sorted(glob.glob('output/contest_code=*/'))[:3]
-for d in dirs:
-    print(f'--- {d.strip(\"/\").split(\"=\")[1]} ---')
-    for row in con.execute(f\"SELECT * FROM read_parquet('{d}*.parquet') LIMIT 3\").fetchall():
-        print(f'  {row}')
-con.close()
-"
+# National level
+duckdb -c "SELECT COUNT(*), ROUND(SUM(total_votes)) FROM read_parquet('output/national/**/*.parquet')"
+
+# Region level
+duckdb -c "SELECT COUNT(*), ROUND(SUM(total_votes)) FROM read_parquet('output/region/**/*.parquet')"
 ```
 
-### Full dump (slow for large datasets — only for small outputs)
+### Compare against raw CSV total
 
 ```bash
-python3 -c "
-import duckdb
-con = duckdb.connect()
-print(con.table('read_parquet(\"output/**/*.parquet\")').fetchall())
-con.close()
-"
+# Raw CSV total
+duckdb -c "SELECT SUM(CAST(votes_amount AS BIGINT)) FROM read_csv_auto('sample-csv/results.csv')"
+
+# Parquet national total (should match)
+duckdb -c "SELECT ROUND(SUM(total_votes)) FROM read_parquet('output/national/**/*.parquet')"
+```
+
+All 6 levels should have the same total votes — only the row granularity differs:
+
+| Level | Rows (approx) |
+|-------|--------------|
+| national | 41K |
+| region | 46K |
+| province | 62K |
+| municipality | 439K |
+| barangay | 10.7M |
+| precinct | 11.3M |
+
+---
+
+## 4. Output Structure
+
+```
+output/
+├── national/            ← 41K rows, 1 level of grouping
+│   ├── contest_code=00399000/
+│   │   └── data_0.parquet
+│   ├── contest_code=00401000/
+│   │   └── data_0.parquet
+│   └── ...
+├── region/              ← 46K rows, adds reg_name
+├── province/            ← 62K rows, adds reg_name + prv_name
+├── municipality/        ← 439K rows, adds reg_name + prv_name + mun_name
+├── barangay/            ← 10.7M rows, adds brgy_name
+└── precinct/            ← 11.3M rows, adds pollplace (voting center)
 ```
 
 ---
 
-## 4. Partition by a Different Column
+## 5. API Integration
 
-```python
-# Default: partition_by="contest_code"
-parse_and_aggregate("data.csv", "out/")
+The NestJS API reads the **national-level** Parquet files at `output/national/`:
 
-# Partition by precinct instead
-parse_and_aggregate("data.csv", "out/", partition_by="precinct_code")
+```
+NestJS → execSync("duckdb -json -c \"SELECT ... FROM 'output/national/**/*.parquet'\"")
 ```
 
-Output directories: `out/precinct_code=001-A/data.parquet`, etc.
-
-Works with any column present in the CSV.
+Set `PARQUET_BASE_PATH` env var to override the default (project root `output/`).
 
 ---
 
-## 5. Load Postgres Reference Data (Optional)
+## 6. Load Postgres Reference Data (Optional)
 
 Requires a local Postgres instance with a `pprcv_local` database:
 
@@ -148,7 +172,7 @@ Note: Party-list candidates have empty `PARTIES_CODE`, which the script converts
 
 ---
 
-## 6. Clean Up
+## 7. Clean Up
 
 ```bash
 rm -rf output/
@@ -162,11 +186,17 @@ rm -rf output/
 # Test
 pytest tests/etl/ -v
 
-# Run
-python3 -c "from src.etl.processor import parse_and_aggregate; r=parse_and_aggregate('sample-csv/results.csv','output/'); print(r)"
+# Run (full dataset, 6 levels)
+python3 scripts/run_aggregation.py sample-csv/results.csv sample-csv/precincts.csv output/
 
-# Quick summary
-python3 -c "import duckdb; con=duckdb.connect(); [print(f'  contest={r[0]:>10}  rows={r[1]:>6}  votes={r[2]:>10}') for r in con.execute(\"SELECT contest_code, COUNT(*), SUM(total_votes) FROM read_parquet('output/**/*.parquet') GROUP BY contest_code ORDER BY contest_code\").fetchall()]; con.close()"
+# Run (sample)
+python3 scripts/run_aggregation.py sample-csv/results.csv sample-csv/precincts.csv output/ --sample 100000
+
+# Inspect national total
+duckdb -c "SELECT ROUND(SUM(total_votes)) FROM read_parquet('output/national/**/*.parquet')"
+
+# Compare with CSV
+duckdb -c "SELECT SUM(CAST(votes_amount AS BIGINT)) FROM read_csv_auto('sample-csv/results.csv')"
 
 # Load Postgres
 python3 scripts/load_ref_data.py          # skip if loaded

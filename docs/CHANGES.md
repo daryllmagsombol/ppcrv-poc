@@ -27,6 +27,97 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-13 — QA review: fixed 14 bugs (race conditions, state management, backend validation)
+
+**Files changed:**
+- `apps/web/src/app/results/components/selection-panel.tsx` — race condition, missing deps, clear contest, CSS transition
+- `apps/web/src/app/results/page.tsx` — race condition via AbortController
+- `apps/web/src/app/results/components/results-table.tsx` — loading overlay, unique React key
+- `apps/api/src/modules/results/results.service.ts` — integer contest code, geo param validation
+- `apps/api/src/modules/results/__tests__/results.service.spec.ts` — updated test for new contest code format
+
+**Author:** Team Leader + QA subagent
+**Summary:** QA review found 2 critical race conditions, 4 moderate bugs, and 8 minor issues in the results page. All fixed. 30/30 tests pass (17 API + 13 ETL), TypeScript compiles clean.
+
+### What changed
+
+**Critical — Race conditions:**
+- C1 (`selection-panel.tsx`): `fetchContests` now uses a `fetchGen` ref counter — stale contest list responses are discarded when a newer fetch arrives
+- C2 (`page.tsx`): `handleSelectionChange` now uses `AbortController` — rapid contest switches cancel the in-flight fetch, preventing results from the wrong contest displaying
+
+**Moderate — State & validation:**
+- M1 (`results.service.ts`): Contest codes compared as integers (`contest_code = 399000`) instead of quoted padded strings — removes fragile DuckDB implicit coercion
+- M2 (`selection-panel.tsx`): Voting Center `onChange` now clears `selectedContest`, matching the clearing pattern of all other geography dropdowns
+- M3 (`selection-panel.tsx`): Added missing parent deps (`selectedRegion`, `selectedProvince`) to municipality/barangay/VC `useEffect` arrays — safe today but prevents future bugs
+- M4 (`results.service.ts`): `buildContestQuery` throws `BadRequestException` for incomplete geo parameter chains instead of silently returning national-level data
+
+**Minor — UX & code quality:**
+- m1: `onSelectionChange` added to effect dependency array
+- m2: Contest dropdown gets `loading` prop + "Loading..." placeholder
+- m3: Empty state text changed to "Select a contest to view results."
+- m4: Loading state overlays existing table (opacity 50% + "Updating results..." badge) instead of replacing it — no layout jump
+- m5: All async `fetchContests` calls in event handlers prefixed with `void`
+- m6: Collapse arrow inline style replaced with Tailwind `-rotate-90`/`rotate-0` classes for working CSS transition animation
+- m7: Identified test coverage gaps (precinct level, error handling, SQL injection patterns) — logged for future work
+- m8: React `key` changed from `c.rank` to `` `${contest.code}-${c.rank}-${c.name}` `` to avoid collisions on duplicate ranks
+
+### Why
+- Race conditions caused visible bugs: contest list showing wrong geography's contests, results table showing data for wrong contest after rapid clicking
+- The contest code coercion was a silent time bomb — works today because DuckDB casts string to int implicitly, but breaks if Parquet schema changes
+- Missing ancestor param validation made the contest API a trap for direct consumers
+- The loading spinner replacing the table caused a jarring layout shift; overlay keeps visual context
+
+---
+
+## 2026-07-13 — Fixed ETL OOM on full dataset, corrected Parquet paths, updated docs
+
+**Files changed:**
+- `src/etl/aggregator.py` — rewrote for memory efficiency
+- `apps/api/src/modules/results/results.service.ts` — parquetBase path fix
+- `apps/web/src/app/results/page.tsx` — defensive filters + API error handling
+- `scripts/run_aggregation.py` — float formatting fix
+- `etl/USE.md` — major rewrite for multi-level aggregator + memory notes
+- `docs/DEV-SETUP.md` — path fixes
+- `docs/CHANGES.md` — new entry
+- `README.md` — quick start path fix
+
+**Author:** Team Leader
+**Summary:** The existing Parquet output was generated from a tiny sample (~0.4% of data). Full 24M-row aggregation hit OOM (12.7GB). Fixed by eliminating the `joined_data` materialized table, streaming JOIN→GROUP BY inline, using per-level DuckDB connections, and tuning memory settings. Re-ran in ~1:40, all 6 levels now match raw CSV totals exactly (1,147,001,580 votes).
+
+### What changed
+
+**ETL memory fix (`src/etl/aggregator.py`):**
+- Removed `CREATE TABLE joined_data AS ...` — was materializing all 24M rows × 10 VARCHAR columns (~8GB+)
+- Each level now does JOIN+GROUP BY inline via subquery — DuckDB pipelines streaming hash join
+- Per-level DuckDB connection (fresh `connect()` / `close()` per level) so memory is freed between levels
+- Added DuckDB tuning: `SET memory_limit='6GB'`, `SET threads=2`, `SET preserve_insertion_order=false`, `SET temp_directory`
+- Drop intermediate aggregation tables after COPY to free memory
+- All 6 levels verified: national=1,147,001,580, region=1,147,001,580, province=1,147,001,580, municipality=1,147,001,580, barangay=1,147,001,580, precinct=1,147,001,580
+
+**API path fix (`apps/api/src/modules/results/results.service.ts`):**
+- Changed `parquetBase` from `output/multi-level` → `output` to match new ETL output location
+
+**Frontend defensive fix (`apps/web/src/app/results/page.tsx`):**
+- Changed `{results && <BreadcrumbNav ...>` to `{results?.filters && ...}` — guards against API error responses that are truthy but lack `filters`
+- Added `if (!res.ok) throw new Error(...)` so failed API calls don't silently set invalid state
+
+**Script fix (`scripts/run_aggregation.py`):**
+- Fixed print format: `{level.total_votes:>10,d}` → `{int(round(level.total_votes)):>10,d}` for DuckDB float totals
+- Changed summary line to show national total instead of sum across all 6 levels
+
+**Docs updated:**
+- `etl/USE.md` — Full rewrite: multi-level aggregator as primary path, streaming approach documented, performance/memory notes (~1:40, ~6GB), API integration section, updated inspect commands, expanded test table
+- `docs/DEV-SETUP.md` — 3 path fixes: `output/multi-level` → `output` (CLI command, env var default, DuckDB glob example)
+- `README.md` — Quick start command: `output/multi-level --sample 100000` → `output --sample 100000`
+
+### Why
+- Full aggregation was never run — existing Parquet was from a `--sample 100000` during POC dev
+- Intermediate `joined_data` table consumed ~8GB+ for VARCHAR columns, hitting 12.7GB system memory limit
+- Streaming JOIN avoids materializing all rows; DuckDB pipelines the hash join directly into GROUP BY
+- Path mismatch (`output/multi-level` vs `output`) broke API after re-running aggregation to the correct location
+
+---
+
 ## 2026-07-09 — Multi-level aggregation, NestJS API, Next.js UI, monorepo setup, and path fixes
 
 **Files changed:**

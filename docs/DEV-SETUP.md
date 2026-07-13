@@ -216,7 +216,7 @@ Typography: `Playfair Display` (headings), `Source Sans 3` (body), `JetBrains Mo
 The API does NOT import the DuckDB Python library. Instead:
 
 ```
-NestJS → execSync("duckdb -json -c \"SELECT ... FROM 'output/multi-level/national/**/*.parquet'\"")
+NestJS → execSync("duckdb -json -c \"SELECT ... FROM 'output/national/**/*.parquet'\"")
         → DuckDB CLI reads Parquet files directly
         → Returns JSON to stdout
         → NestJS parses JSON → returns response
@@ -255,7 +255,7 @@ duckdb --version
 ### 4. Generate multi-level Parquet data
 
 ```bash
-python3 scripts/run_aggregation.py sample-csv/results.csv sample-csv/precincts.csv output/multi-level --sample 100000
+python3 scripts/run_aggregation.py sample-csv/results.csv sample-csv/precincts.csv output --sample 100000
 ```
 
 Omit `--sample` for full 24M-row dataset (takes a few minutes).
@@ -300,7 +300,7 @@ cd /path/to/project && python3 -m pytest tests/
 | Variable | Default | Used By |
 |----------|---------|---------|
 | `PORT` | `3001` | NestJS API server port |
-| `PARQUET_BASE_PATH` | `<project>/output/multi-level` | DuckDB Parquet file root |
+| `PARQUET_BASE_PATH` | `<project>/output` | DuckDB Parquet file root |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:3001/api` | Next.js API client fetch URL |
 
 ---

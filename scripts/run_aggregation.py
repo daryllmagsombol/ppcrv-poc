@@ -40,11 +40,13 @@ def main() -> None:
     for level_name, level in sorted(result.levels.items()):
         print(
             f"  {level_name:>12s}: "
-            f"{level.total_votes:>10,d} votes, "
+            f"{int(round(level.total_votes)):>10,d} votes, "
             f"{level.row_count:>8,d} rows, "
             f"{len(level.output_files):>3d} files"
         )
-    print(f"\nTotal votes across all levels: {sum(l.total_votes for l in result.levels.values())}")
+    national = result.levels.get("national")
+    if national:
+        print(f"\nTotal votes (national): {national.total_votes:,}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { SelectionPanel } from './components/selection-panel';
 import { ResultsTable } from './components/results-table';
 import { BreadcrumbNav } from './components/breadcrumb-nav';
@@ -25,19 +25,28 @@ interface ResultsData {
 export default function ResultsPage() {
   const [results, setResults] = useState<ResultsData | null>(null);
   const [loading, setLoading] = useState(false);
+  // C2: AbortController to cancel in-flight requests
+  const abortRef = useRef<AbortController | null>(null);
 
   const handleSelectionChange = useCallback(async (filters: Record<string, string>) => {
+    // Cancel any in-flight request
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     try {
       const params = new URLSearchParams(filters);
-      const res = await fetch(`${API}/results?${params}`);
-      const data = await res.json();
-      setResults(data);
+      const res = await fetch(`${API}/results?${params}`, { signal: controller.signal });
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      const data: ResultsData = await res.json();
+      if (!controller.signal.aborted) setResults(data);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('Failed to fetch results:', err);
-      setResults(null);
+      if (!controller.signal.aborted) setResults(null);
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }, []);
 
@@ -49,8 +58,9 @@ export default function ResultsPage() {
 
       <SelectionPanel onSelectionChange={handleSelectionChange} />
 
-      {results && <BreadcrumbNav filters={results.filters} />}
+      {results?.filters && <BreadcrumbNav filters={results.filters} />}
 
+      {/* m3: Keep stale results visible while loading (no flash) */}
       <ResultsTable
         contests={results?.contests || []}
         loading={loading}

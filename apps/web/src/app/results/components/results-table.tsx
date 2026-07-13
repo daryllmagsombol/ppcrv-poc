@@ -45,7 +45,8 @@ function ContestTable({ contest }: { contest: ContestGroup }) {
         </thead>
         <tbody>
           {contest.candidates.map((c) => (
-            <tr key={c.rank} className="even:bg-[#E8E5DE]">
+            // m8: Use unique key (code + rank + name) instead of rank-only
+            <tr key={`${contest.code}-${c.rank}-${c.name}`} className="even:bg-[#E8E5DE]">
               <td className="px-4 py-2 font-mono text-sm">{c.rank}</td>
               <td className="px-4 py-2 font-sans text-sm font-medium text-[#1B3A5C]">{c.name}</td>
               <td className="px-4 py-2 font-mono text-xs text-gray-600">{c.party}</td>
@@ -63,6 +64,24 @@ function ContestTable({ contest }: { contest: ContestGroup }) {
 }
 
 export function ResultsTable({ contests, loading }: ResultsTableProps) {
+  // m4: Loading overlay instead of replacing the table (no layout jump)
+  if (loading && contests.length > 0) {
+    return (
+      <div className="relative mt-6">
+        <div className="absolute inset-0 z-10 flex items-start justify-center bg-white/60 pt-12">
+          <div className="rounded bg-[#1B3A5C] px-4 py-2 text-sm font-semibold text-[#F8F6F0] shadow">
+            Updating results...
+          </div>
+        </div>
+        <div className="opacity-50">
+          {contests.map((contest) => (
+            <ContestTable key={contest.code} contest={contest} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="mt-6 rounded border border-gray-200 bg-[#F8F6F0] p-8 text-center text-sm text-gray-500">
@@ -74,7 +93,7 @@ export function ResultsTable({ contests, loading }: ResultsTableProps) {
   if (contests.length === 0) {
     return (
       <div className="mt-6 rounded border border-gray-200 bg-[#F8F6F0] p-8 text-center text-sm text-gray-500">
-        No results found for this selection.
+        Select a contest to view results.
       </div>
     );
   }
