@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { CascadingDropdown } from './cascading-dropdown';
 
 interface SelectionPanelProps {
@@ -15,13 +15,21 @@ async function fetchJson(url: string): Promise<any> {
   return res.json();
 }
 
+interface ContestInfo {
+  code: string;
+  name: string;
+  category: string;
+}
+
 export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
   const [regions, setRegions] = useState<string[]>([]);
   const [provinces, setProvinces] = useState<string[]>([]);
   const [municipalities, setMunicipalities] = useState<string[]>([]);
   const [barangays, setBarangays] = useState<string[]>([]);
   const [votingCenters, setVotingCenters] = useState<string[]>([]);
-  const [contests, setContests] = useState<{ code: string; name: string }[]>([]);
+  const [contestInfos, setContestInfos] = useState<ContestInfo[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string>('');
 
   const [selectedRegion, setSelectedRegion] = useState('');
   const [selectedProvince, setSelectedProvince] = useState('');
@@ -48,11 +56,45 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
       .finally(() => setLoading(prev => ({ ...prev, regions: false })));
   }, []);
 
-  useEffect(() => {
-    fetchJson(`${API}/contests`)
-      .then(setContests)
-      .catch(() => setContests([]));
+  const fetchContests = useCallback(async (geo: Record<string, string>) => {
+    const params = new URLSearchParams(geo);
+    const url = params.toString() ? `${API}/contests?${params}` : `${API}/contests`;
+    try {
+      const data: ContestInfo[] = await fetchJson(url);
+      const catOrder = ['Senator','Party List','Governor','Vice Governor','House of Reps',
+        'Provincial Board','Mayor','Vice Mayor','Councilor','BARMM Party Rep','BARMM Parliament'];
+      const seen = new Set<string>();
+      const cats: string[] = [];
+      for (const cat of catOrder) {
+        if (data.some(c => c.category === cat) && !seen.has(cat)) {
+          seen.add(cat);
+          cats.push(cat);
+        }
+      }
+      setContestInfos(data);
+      setCategories(cats);
+      setSelectedCategory(prev => {
+        if (cats.includes(prev)) return prev;
+        return cats.length > 0 ? cats[0] : '';
+      });
+    } catch {
+      setContestInfos([]);
+      setCategories([]);
+      setSelectedCategory('');
+    }
   }, []);
+
+  useEffect(() => {
+    fetchContests({});
+  }, [fetchContests]);
+
+  // Auto-select if only one contest in category
+  useEffect(() => {
+    const filtered = contestInfos.filter(c => c.category === selectedCategory);
+    if (filtered.length === 1 && selectedContest !== filtered[0].code) {
+      setSelectedContest(filtered[0].code);
+    }
+  }, [selectedCategory, contestInfos]);
 
   useEffect(() => {
     if (!selectedRegion) { setProvinces([]); setSelectedProvince(''); return; }
@@ -140,6 +182,8 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
               setSelectedMunicipality('');
               setSelectedBarangay('');
               setSelectedVC('');
+              setSelectedContest('');
+              fetchContests({ reg: e.target.value });
             }}
             loading={loading.regions}
           />
@@ -152,6 +196,8 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
               setSelectedMunicipality('');
               setSelectedBarangay('');
               setSelectedVC('');
+              setSelectedContest('');
+              fetchContests({ reg: selectedRegion, prv: e.target.value });
             }}
             disabled={!selectedRegion}
             loading={loading.provinces}
@@ -164,6 +210,8 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
               setSelectedMunicipality(e.target.value);
               setSelectedBarangay('');
               setSelectedVC('');
+              setSelectedContest('');
+              fetchContests({ reg: selectedRegion, prv: selectedProvince, mun: e.target.value });
             }}
             disabled={!selectedProvince}
             loading={loading.municipalities}
@@ -175,6 +223,8 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
             onChange={(e) => {
               setSelectedBarangay(e.target.value);
               setSelectedVC('');
+              setSelectedContest('');
+              fetchContests({ reg: selectedRegion, prv: selectedProvince, mun: selectedMunicipality, brgy: e.target.value });
             }}
             disabled={!selectedMunicipality}
             loading={loading.barangays}
@@ -187,11 +237,39 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
             disabled={!selectedBarangay}
             loading={loading.vcs}
           />
+          {/* Category tabs */}
+          {categories.length > 0 && (
+            <div className="mt-3 mb-2 flex flex-wrap items-center gap-2 border-t border-gray-200 pt-2">
+              <span className="mr-1 text-xs font-semibold uppercase tracking-wide text-[#1B3A5C]">
+                Type:
+              </span>
+              {categories.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => {
+                    setSelectedCategory(cat);
+                    setSelectedContest('');
+                  }}
+                  className={`rounded px-3 py-1 text-xs font-semibold uppercase tracking-wide transition-colors ${
+                    selectedCategory === cat
+                      ? 'bg-[#1B3A5C] text-[#F8F6F0]'
+                      : 'bg-[#E8E5DE] text-[#1B3A5C] hover:bg-[#D0CCC0]'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          )}
           <CascadingDropdown
             label="CONTEST"
-            options={contests.map(c => ({ value: c.code, label: c.name || c.code }))}
+            options={contestInfos
+              .filter(c => c.category === selectedCategory || !selectedCategory)
+              .map(c => ({ value: c.code, label: c.name }))}
             value={selectedContest}
             onChange={(e) => setSelectedContest(e.target.value)}
+            disabled={contestInfos.length === 0}
+            placeholder="Select Contest"
           />
         </div>
       )}
