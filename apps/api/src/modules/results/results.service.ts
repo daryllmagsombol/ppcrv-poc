@@ -70,7 +70,7 @@ export class ResultsService {
     try {
       const output = execFileSync('duckdb', ['-json', '-c', sql], {
         encoding: 'utf-8',
-        maxBuffer: 10 * 1024 * 1024,
+        maxBuffer: 50 * 1024 * 1024,
       });
       rows = JSON.parse(output);
     } catch {
@@ -131,7 +131,7 @@ export class ResultsService {
     try {
       const output = execFileSync('duckdb', ['-json', '-c', sql], {
         encoding: 'utf-8',
-        maxBuffer: 10 * 1024 * 1024,
+        maxBuffer: 50 * 1024 * 1024,
       });
       rows = JSON.parse(output);
     } catch {
@@ -204,8 +204,11 @@ export class ResultsService {
       throw new BadRequestException(`Invalid level: ${level}`);
     }
 
-    const whereClause = parents && Object.keys(parents).length > 0
-      ? 'WHERE ' + Object.entries(parents)
+    const validParents = parents
+      ? Object.fromEntries(Object.entries(parents).filter(([_, v]) => v != null))
+      : {};
+    const whereClause = Object.keys(validParents).length > 0
+      ? 'WHERE ' + Object.entries(validParents)
           .map(([k, v]) => `${k} = '${esc(v)}'`)
           .join(' AND ')
       : '';
@@ -213,7 +216,7 @@ export class ResultsService {
     const sql = `SELECT DISTINCT ${column} FROM '${this.parquetBase}/${level}/**/*.parquet' ${whereClause} ORDER BY ${column}`;
     let rows: any[];
     try {
-      const output = execFileSync('duckdb', ['-json', '-c', sql], { encoding: 'utf-8' });
+      const output = execFileSync('duckdb', ['-json', '-c', sql], { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024 });
       rows = JSON.parse(output);
     } catch {
       throw new BadRequestException('Failed to query distinct values');
