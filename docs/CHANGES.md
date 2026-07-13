@@ -27,6 +27,40 @@ Each entry follows this structure:
 
 ---
 
+## 2026-07-13 — Added PR review CI workflow, fixed "All" category tab not appearing
+
+**Files changed:**
+- `.github/workflows/opencode-review.yml` (new) — GitHub Actions workflow
+- `apps/web/src/app/results/components/selection-panel.tsx` — "All" tab fix
+- `docs/superpowers/specs/2026-07-13-pr-review-ci-design.md` (new) — design spec
+- `docs/superpowers/plans/2026-07-13-pr-review-ci.md` (new) — implementation plan
+
+**Author:** Team Leader
+**Summary:** Added a GitHub Actions workflow that runs `turbo build`, `turbo test`, and an AI code review using OpenCode DeepSeek V4 Flash on every PR. Also fixed a bug where the "All" category tab was defined in `CATEGORY_ORDER` but never rendered because no API contest has `category === 'All'`.
+
+### What changed
+
+**New: PR Review CI workflow (`.github/workflows/opencode-review.yml`):**
+- 3 parallel jobs: `build` (turbo build, 5min), `test` (turbo test, 5min), `review` (AI review, 10min)
+- Review uses `anomalyco/opencode/github@v1.17.8` with `opencode/deepseek-v4-flash-free`
+- Posts findings as a GitHub PR review with file:line references
+- Skips if PR is from a fork; requires `OPENCODE_API_KEY` secret
+
+**Fix: "All" category tab not appearing (`selection-panel.tsx`):**
+- Root cause: `fetchContests` built the categories array by checking `data.some(c => c.category === cat)`, which filtered out `'All'` since no contest data has that category
+- Fix: Always prepend `'All'` to categories, skip it in the data-matching loop
+- Now "All" is always the first Type button, selected by default on page load
+
+**Docs created:**
+- `docs/superpowers/specs/2026-07-13-pr-review-ci-design.md` — CI workflow design
+- `docs/superpowers/plans/2026-07-13-pr-review-ci.md` — implementation plan
+
+### Why
+- No CI existed before — every PR required manual build/test/review
+- The "All" tab was implemented but invisible due to a logic bug in category filtering
+
+---
+
 ## 2026-07-13 — QA review: fixed 14 bugs (race conditions, state management, backend validation)
 
 **Files changed:**

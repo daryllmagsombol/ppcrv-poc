@@ -74,8 +74,9 @@ export function SelectionPanel({ onSelectionChange }: SelectionPanelProps) {
       const data: ContestInfo[] = await fetchJson(url);
       if (gen !== fetchGen.current) return; // stale response, discard
       const seen = new Set<string>();
-      const cats: string[] = [];
+      const cats: string[] = ['All'];
       for (const cat of CATEGORY_ORDER) {
+        if (cat === 'All') continue;
         if (data.some(c => c.category === cat) && !seen.has(cat)) {
           seen.add(cat);
           cats.push(cat);
