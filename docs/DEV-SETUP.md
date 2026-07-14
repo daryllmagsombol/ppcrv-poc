@@ -1,47 +1,26 @@
-# Dev Setup — PPCRV POC
-
-## Overview
-
-A local proof-of-concept for the PPCRV election results dashboard. The pipeline:
-
-```
-CSV (results + precincts)
-  → DuckDB aggregation (6 geographic levels)
-  → Partitioned Parquet files
-  → NestJS API (shells out to DuckDB CLI for on-read queries)
-  → Next.js UI (cascading geographic selection panel + results table)
-```
-
----
+# DEV-SETUP
 
 ## Prerequisites
 
-| Tool | Version | Required for |
-|------|---------|-------------|
-| Node.js | ≥18 | NestJS API, Next.js UI |
-| pnpm | ≥8 (9.1.0 used) | Monorepo package manager |
-| Python | ≥3.10 | ETL aggregation scripts |
-| DuckDB CLI | 1.4.5 | Parquet queries (API shells out to `duckdb` binary) |
+| Tool | Version | Check |
+|---|---|---|
+| Node.js | ≥22 | `node --version` |
+| pnpm | ≥9 | `pnpm --version` |
+| Python | ≥3.9 | `python3 --version` |
+| pip | — | `pip --version` |
+| DuckDB CLI | ≥1.0 | `duckdb --version` |
+| PostgreSQL | ≥16 | `psql --version` |
 
-### Install DuckDB CLI
-
-```bash
-curl -fsSL https://install.duckdb.org | sh
-# or manually download from https://duckdb.org/docs/installation/
-# Binary must be on PATH as `duckdb`
-```
-
-Verify:
-```bash
-duckdb --version
-# v1.4.5
-```
-
-### Install pnpm
+**Install DuckDB CLI:**
 
 ```bash
-npm install -g pnpm@9.1.0
+# macOS
+brew install duckdb
+
+# Linux — download from https://duckdb.org/docs/installation/
 ```
+
+**Google Drive:** Download `results.csv` (2 GB) and place it at `sample-csv/results.csv`. The file is gitignored — you need to obtain it separately.
 
 ---
 
@@ -50,277 +29,305 @@ npm install -g pnpm@9.1.0
 ```
 pprcv-poc/
 ├── apps/
-│   ├── api/                          # NestJS API (port 3001)
-│   │   ├── src/
-│   │   │   ├── main.ts               # Bootstrap, CORS, ValidationPipe
-│   │   │   ├── app.module.ts         # Root module (imports ResultsModule)
-│   │   │   └── modules/
-│   │   │       └── results/
-│   │   │           ├── results.controller.ts   # REST endpoints
-│   │   │           ├── results.service.ts      # DuckDB CLI queries
-│   │   │           ├── results.module.ts       # NestJS module
-│   │   │           ├── dto/
-│   │   │           │   ├── result-query.dto.ts       # Query validation
-│   │   │           │   └── results-response.dto.ts   # Response shape
-│   │   │           └── __tests__/
-│   │   │               ├── results.controller.spec.ts
-│   │   │               └── results.service.spec.ts
-│   │   ├── nest-cli.json
-│   │   ├── tsconfig.json
-│   │   └── package.json
+│   ├── api/                        # NestJS backend
+│   │   └── src/
+│   │       └── modules/results/
+│   │           ├── dto/            # DTOs with class-validator
+│   │           ├── __tests__/      # Jest tests (19 tests)
+│   │           ├── results.service.ts    # DuckDB CLI queries
+│   │           └── results.controller.ts # REST endpoints
 │   │
-│   ├── web/                          # Next.js UI (port 3000)
-│   │   ├── src/app/
-│   │   │   ├── layout.tsx            # Root layout (Ballot colors)
-│   │   │   ├── page.tsx              # Homepage → link to /results
-│   │   │   ├── globals.css           # Tailwind directives
-│   │   │   └── results/
-│   │   │       ├── page.tsx          # Results page (client component)
-│   │   │       └── components/
-│   │   │           ├── selection-panel.tsx     # Collapsible dropdown panel
-│   │   │           ├── cascading-dropdown.tsx  # Generic cascading select
-│   │   │           ├── results-table.tsx       # Candidate rankings
-│   │   │           └── breadcrumb-nav.tsx      # Geographic drill breadcrumb
-│   │   ├── tailwind.config.ts        # PPCRV brand colors + fonts
-│   │   ├── postcss.config.js
-│   │   ├── tsconfig.json
-│   │   └── package.json
+│   ├── etl/                        # ETL pipeline
+│   │   ├── src/etl/
+│   │   │   ├── aggregator.py       # Multi-level aggregation
+│   │   │   ├── models.py           # Dataclass models
+│   │   │   └── processor.py        # Simple aggregation
+│   │   ├── scripts/
+│   │   │   ├── run_aggregation.py        # CLI entry point
+│   │   │   ├── load_ref_data.py          # Postgres loader
+│   │   │   └── generate-contest-names.mjs
+│   │   ├── tests/                  # Pytest (13 tests)
+│   │   │   └── fixtures/
+│   │   ├── output/                 # Generated Parquet (gitignored)
+│   │   ├── .env.example
+│   │   └── pyproject.toml
 │   │
-│   └── etl/                          # Python ETL
-│       ├── src/
-│       │   └── etl/
-│       │       ├── __init__.py
-│       │       ├── models.py
-│       │       ├── processor.py
-│       │       └── aggregator.py
-│       ├── scripts/
-│       │   └── run_aggregation.py
-│       ├── tests/
-│       │   ├── test_processor.py
-│       │   ├── test_aggregator.py
-│       │   └── fixtures/
-│       ├── output/
-│       │   └── multi-level/
-│       │       ├── national/
-│       │       │   └── contest_code=XXX/
-│       │       ├── region/
-│       │       ├── province/
-│       │       ├── municipality/
-│       │       ├── barangay/
-│       │       └── precinct/
-│       └── pyproject.toml
+│   └── web/                        # Next.js frontend
+│       └── src/app/results/
+│           └── components/         # SelectionPanel, ResultsTable, etc.
 │
-├── packages/
-│   └── shared/                       # Stub shared types (future use)
+├── data/
+│   └── contest-names.json          # Contest name lookup
 │
-├── sample-csv/                       # 24M-row real election data
-│   ├── results.csv
-│   ├── precincts.csv
-│   ├── candidates.csv
-│   ├── contest.csv
-│   └── parties.csv
+├── sample-csv/                     # Source CSV files
+│   ├── candidates.csv              # 2.2 MB
+│   ├── contest.csv                 # 326 KB
+│   ├── parties.csv                 # 16 KB
+│   ├── precincts.csv               # 10 MB
+│   └── results.csv                 # 2 GB (gitignored, download separately)
 │
 ├── docs/
-│   ├── CHANGES.md                   # Full change log
-│   ├── DEV-SETUP.md                 # ← this file
-│   └── superpowers/
-│       ├── specs/                   # Design specs
-│       └── plans/                   # Implementation plans
+│   ├── v1/ v2/ v3/                 # Architecture docs by version
+│   ├── superpowers/                # Design specs & plans
+│   ├── CHANGES.md
+│   └── DEV-SETUP.md
 │
-├── package.json                      # Root: pnpm workspace + turbo
-├── pnpm-workspace.yaml               # Workspace definition
-├── turbo.json                        # Turborepo task config
-└── .npmrc                            # shamefully-hoist=true
+├── package.json                    # Turborepo root
+├── pnpm-workspace.yaml
+└── turbo.json
 ```
 
 ---
 
-## Technologies
-
-### Monorepo — pnpm + Turborepo
-
-- **pnpm workspaces** (`pnpm-workspace.yaml`) — manages `apps/*` and `packages/*` as a single repo
-- **Turborepo** (`turbo.json`) — parallel task execution with caching
-  - `pnpm dev` → runs `nest start --watch` (API) + `next dev` (web) concurrently
-  - `pnpm build` → builds API (tsc) + web (next build) with dependency ordering
-  - `pnpm test` → runs Jest (API) tests
-- **`.npmrc`** — `shamefully-hoist=true` required by NestJS's decorator metadata reflection
-
-#### Why pnpm + Turborepo
-- Disk-efficient (hard links, not copies)
-- Strict module isolation by default (`. npmrc` loosens it for NestJS compat)
-- Turborepo's `persistent: true` keeps both dev servers running in parallel
-
-### API — NestJS (TypeScript)
-
-- **Framework:** NestJS 10 with Express platform
-- **Validation:** `class-validator` + `class-transformer` DTOs + global `ValidationPipe`
-- **Query Engine:** Shells out to `duckdb` CLI binary (`execSync`), passes SQL with `-json` flag
-- **CORS:** Enabled globally (port 3000 → 3001)
-- **Test:** Jest + `@nestjs/testing` with `ts-jest`
-
-#### Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/results?level=...&contest=...&reg=...` | Aggregated candidate results |
-| GET | `/api/contests` | List all contest codes |
-| GET | `/api/regions` | List all region names |
-| GET | `/api/regions/:reg/provinces` | Provinces in a region |
-| GET | `/api/regions/:reg/provinces/:prv/municipalities` | Municipalities in a province |
-| GET | `/api/regions/:reg/provinces/:prv/municipalities/:mun/barangays` | Barangays in a municipality |
-| GET | `/api/barangays/:brgy/voting-centers` | Voting centers in a barangay |
-
-All cascading endpoints filter by parent context via DuckDB `WHERE` clauses.
-
-### UI — Next.js 14 (React 18)
-
-- **Framework:** Next.js 14 App Router
-- **Styling:** Tailwind CSS 3 with custom PPCRV brand palette
-- **State:** React `useState` + `useCallback` (no external state lib)
-- **API URL:** `NEXT_PUBLIC_API_URL` env var (default `http://localhost:3001/api`)
-- **Client-side rendering:** Results page is `'use client'` for interactive cascading dropdowns
-
-#### PPCRV Brand Colors
-
-| Token | Hex | Usage |
-|-------|-----|-------|
-| `ink` | `#1B3A5C` | Text, primary backgrounds |
-| `ballot` | `#F8F6F0` | Page background, card surfaces |
-| `stamp` | `#C41E3A` | Accent, errors, highlights |
-| `seal` | `#B8860B` | Gold accents |
-| `field` | `#E8E5DE` | Form field backgrounds |
-| `precinct` | `#2D5A3D` | Success states, verified |
-
-Typography: `Playfair Display` (headings), `Source Sans 3` (body), `JetBrains Mono` (data).
-
-### ETL — Python + DuckDB
-
-- **Aggregation engine:** DuckDB (in-process OLAP, no server needed)
-- **CLI tool:** `apps/etl/scripts/run_aggregation.py` — CLI wrapper with `--sample N` flag
-- **Core logic:** `aggregate_all_levels()` in `apps/etl/src/etl/aggregator.py`
-  - Reads `results.csv` + `precincts.csv` via `read_csv_auto`
-  - Joins on `LPAD(precinct_code, 8)` for precinct geo hierarchy
-  - Aggregates votes at 6 levels in a single DuckDB SQL pass
-  - Writes Hive-partitioned Parquet (`PARTITION_BY (contest_code)`)
-- **Two aggregation modes:**
-  1. **Precinct-level** (`processor.py`): Raw `SUM(VOTES_AMOUNT)` grouped by precinct/candidate/party
-  2. **Multi-level** (`aggregator.py`): Full geographic rollup (national → region → province → municipality → barangay → precinct)
-- **Testing:** pytest with 13 total tests across processor + aggregator
-
-### Key: DuckDB CLI On-Read Query Pattern
-
-The API does NOT import the DuckDB Python library. Instead:
-
-```
-NestJS → execSync("duckdb -json -c \"SELECT ... FROM 'apps/etl/output/national/**/*.parquet'\"")
-        → DuckDB CLI reads Parquet files directly
-        → Returns JSON to stdout
-        → NestJS parses JSON → returns response
-```
-
-This avoids the overhead of a running database server. For production, swap to DuckDB Python bindings or a real database.
-
----
-
-## Setup
-
-### 1. Clone and install JS deps
+## Quick Start
 
 ```bash
-git clone <repo-url> pprcv-poc
-cd pprcv-poc
+# 1. Clone and install dependencies
 pnpm install
-```
+pip install duckdb pytest pyarrow psycopg2-binary python-dotenv
 
-### 2. Install Python ETL deps
+# 2. Configure Postgres connection
+cp apps/etl/.env.example apps/etl/.env
+# Edit apps/etl/.env — set PGUSER to your system username
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-# or: pip install duckdb pytest pyarrow psycopg2-binary
-```
+# 3. Scaffold reference database
+python apps/etl/scripts/load_ref_data.py
 
-### 3. Verify DuckDB CLI
+# 4. Run ETL to generate Parquet output
+python apps/etl/scripts/run_aggregation.py \
+  sample-csv/results.csv \
+  sample-csv/precincts.csv \
+  apps/etl/output --sample 100000
 
-```bash
-duckdb --version
-# v1.4.5
-```
-
-### 4. Generate multi-level Parquet data
-
-```bash
-python3 apps/etl/scripts/run_aggregation.py sample-csv/results.csv sample-csv/precincts.csv apps/etl/output --sample 100000
-```
-
-Omit `--sample` for full 24M-row dataset (takes a few minutes).
-
----
-
-## Running the App
-
-```bash
-# Start both API + web (parallel, Turbo)
+# 5. Start API + Frontend
 pnpm dev
 ```
 
-- **API:** http://localhost:3001
-- **Web:** http://localhost:3000
+Open http://localhost:3000/results in your browser.
 
-Test the API directly:
+---
+
+## 1. Database Scaffold (PostgreSQL)
+
+Sets up a local Postgres database with reference data (parties, contests, precincts, candidates).
+
+### Install & start PostgreSQL
 
 ```bash
-curl -s http://localhost:3001/api/contests | head -20
-curl -s http://localhost:3001/api/regions
-curl -s "http://localhost:3001/api/results?level=national&contest=399000"
-curl -s "http://localhost:3001/api/regions/NATIONAL%20CAPITAL%20REGION/provinces"
+# macOS
+brew install postgresql@16
+brew services start postgresql@16
+
+# Verify
+psql -U $(whoami) -d postgres -c "SELECT 1"
+```
+
+### Create database
+
+```bash
+createdb pprcv_local
+```
+
+### Configure connection
+
+```bash
+cp apps/etl/.env.example apps/etl/.env
+```
+
+Default `.env`:
+
+```
+PGHOST=localhost
+PGDATABASE=pprcv_local
+PGUSER=daryllmagsombol
+```
+
+Change `PGUSER` to match your system username (`whoami`). On macOS, your system user is usually already a Postgres superuser — no password needed.
+
+### Load reference data
+
+```bash
+python apps/etl/scripts/load_ref_data.py
+```
+
+Expected output:
+
+```
+Created tables (first run)
+Loaded rows:
+  ref_parties: 339
+  ref_contests: 5645
+  ref_precincts: 93629
+  ref_candidates: 41647
+```
+
+Re-run with `--fresh` to drop and reload:
+
+```bash
+python apps/etl/scripts/load_ref_data.py --fresh
 ```
 
 ---
 
-## Running Tests
+## 2. ETL Pipeline (apps/etl)
+
+Aggregates the 2 GB results CSV into per-level Parquet files that the API queries.
+
+### Install
 
 ```bash
-# JavaScript (API)
-cd apps/api && npx jest
+pip install duckdb pytest pyarrow psycopg2-binary python-dotenv
+```
 
-# Python (ETL)
-cd /path/to/project && python3 -m pytest tests/
+### Run aggregation
+
+Full run (~1m 40s for 24M rows):
+
+```bash
+python apps/etl/scripts/run_aggregation.py \
+  sample-csv/results.csv \
+  sample-csv/precincts.csv \
+  apps/etl/output
+```
+
+Dev iteration (100k rows, ~5s):
+
+```bash
+python apps/etl/scripts/run_aggregation.py \
+  sample-csv/results.csv \
+  sample-csv/precincts.csv \
+  apps/etl/output --sample 100000
+```
+
+### Verify
+
+```bash
+ls apps/etl/output/national/*.parquet
+# → e.g. output/national/00399000_0.parquet
+```
+
+Six level directories are created:
+
+```
+apps/etl/output/
+├── national/
+├── region/
+├── province/
+├── municipality/
+├── barangay/
+└── precinct/
+```
+
+### Tests
+
+```bash
+cd apps/etl && pytest tests/ -v
+# → 13 passed
 ```
 
 ---
 
-## Environment Variables
+## 3. Backend (apps/api)
 
-| Variable | Default | Used By |
-|----------|---------|---------|
-| `PORT` | `3001` | NestJS API server port |
-| `PARQUET_BASE_PATH` | `<project>/apps/etl/output` | DuckDB Parquet file root |
-| `NEXT_PUBLIC_API_URL` | `http://localhost:3001/api` | Next.js API client fetch URL |
+NestJS API that queries Parquet files via DuckDB CLI.
+
+### How it runs
+
+`pnpm dev` from project root starts both the API and frontend via Turborepo. The API starts automatically — no separate command needed.
+
+### Configuration
+
+| Env var | Default | Description |
+|---|---|---|
+| `PORT` | `3001` | API listen port |
+| `PARQUET_BASE_PATH` | `apps/etl/output` | Path to Parquet output |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:3001/api` | Frontend → API URL (set in web env) |
+
+The Parquet path resolves relative to the project root. If you moved `output/` elsewhere, set `PARQUET_BASE_PATH`.
+
+### Verify
+
+```bash
+# List regions
+curl http://localhost:3001/api/regions
+# → ["NCR", "CAR", "Region I", ...]
+
+# List contests (national level)
+curl http://localhost:3001/api/contests
+# → [{"code": "00399000", "name": "SENATOR", ...}, ...]
+
+# Fetch results (national level)
+curl "http://localhost:3001/api/results?level=national"
+# → { "level": "national", "contests": [...] }
+
+# Geographic cascade
+curl http://localhost:3001/api/regions/NCR/provinces
+curl http://localhost:3001/api/regions/NCR/provinces/MANILA/municipalities
+```
+
+### Tests
+
+```bash
+cd apps/api && pnpm test
+# → 19 passed
+```
 
 ---
 
-## Key Design Decisions
+## 4. Frontend (apps/web)
 
-1. **DuckDB CLI instead of in-process DuckDB in Node.js** — NestJS shells out because `duckdb` Node.js bindings have native compilation issues; CLI is simpler for a POC and reliably available.
+Next.js frontend that displays election results with geographic filtering.
 
-2. **Parquet files instead of a running database** — Zero maintenance, instant startup, no connection pooling. DuckDB reads Parquet directly with columnar pushdown for sub-millisecond queries.
+### How it runs
 
-3. **Hive-partitioned directories by `contest_code`** — Enables partition pruning: queries for a single contest only scan the relevant `contest_code=XXX/` subdirectory, not the full dataset.
+Starts automatically via `pnpm dev` from the project root.
 
-4. **Cascading dropdowns fetch on-demand** — Each level fetches only when its parent is selected (e.g., provinces load only when a region is picked). No preloading all 93K geographic entries.
+### Configuration
 
-5. **`shamefully-hoist=true` in `.npmrc`** — NestJS decorator metadata reflection (`emitDecoratorMetadata`) requires dependencies to be resolvable from the hoisted root; pnpm's strict isolation breaks this without the flag.
+| Env var | Default | Description |
+|---|---|---|
+| `NEXT_PUBLIC_API_URL` | `http://localhost:3001/api` | API endpoint |
+
+### Verify
+
+Open http://localhost:3000/results in a browser. You should see:
+
+- A geographic selection panel (Region → Province → Municipality → Barangay → Precinct)
+- Contest category tabs (All, Senator, Governor, etc.)
+- Vote counts per candidate
 
 ---
 
-## Common Issues
+## 5. Run Everything
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `duckdb: command not found` | DuckDB CLI not installed | Install DuckDB CLI and ensure it's on PATH |
-| `No files found that match the pattern` | Wrong Parquet path or glob | Set `PARQUET_BASE_PATH` or run `apps/etl/scripts/run_aggregation.py` first |
-| `Cannot find module @nestjs/core` | Missing hoisted deps | Check `.npmrc` has `shamefully-hoist=true`, re-run `pnpm install` |
-| Port 3000/3001 in use | Previous dev server still running | `lsof -ti:3000 -ti:3001 \| xargs kill -9` |
+```bash
+# Single command — starts both API (port 3001) + Frontend (port 3000)
+pnpm dev
+```
+
+This uses Turborepo to run `dev` in both `apps/api` and `apps/web` concurrently.
+
+### Service summary
+
+| Service | Location | Port | Start command |
+|---|---|---|---|
+| Frontend | `apps/web/` | 3000 | `pnpm dev` (from root) |
+| Backend | `apps/api/` | 3001 | `pnpm dev` (from root) |
+| ETL | `apps/etl/` | — | `python apps/etl/scripts/run_aggregation.py ...` |
+| DB | Postgres local | 5432 | `brew services start postgresql@16` |
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `duckdb: command not found` | DuckDB CLI not installed | `brew install duckdb` |
+| `No files found matching the pattern` | Parquet files missing or wrong path | Run ETL or set `PARQUET_BASE_PATH` |
+| `could not connect to server: Connection refused` | Postgres not running | `brew services start postgresql@16` |
+| `FATAL: role "X" does not exist` | Postgres user mismatch | `createuser -s $(whoami)` or set `PGUSER` in `apps/etl/.env` |
+| `database "pprcv_local" does not exist` | Database not created | `createdb pprcv_local` |
+| Frontend shows blank page / 404 | API not running | Wait for `pnpm dev` to finish starting both services |
+| `Module not found: Can't resolve` | Node deps not installed | `pnpm install` |
+| API returns stale results | DuckDB querying old Parquet | Re-run ETL aggregation |
+| `psycopg2` import error | Python deps missing | `pip install psycopg2-binary python-dotenv` |
