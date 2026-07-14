@@ -2,12 +2,13 @@
 """CLI entry point for multi-level aggregation.
 
 Usage:
-    python scripts/run_aggregation.py results.csv precincts.csv output/ [--sample N]
+    python scripts/run_aggregation.py results.csv precincts.csv output/ [--sample N] [--refresh]
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -27,7 +28,15 @@ def main() -> None:
         "--sample", type=int, default=None,
         help="Optional: number of rows to sample (for fast dev iteration)"
     )
+    parser.add_argument(
+        "--refresh", action="store_true",
+        help="Delete and recreate output directory before running (clean slate)"
+    )
     args = parser.parse_args()
+
+    if args.refresh and args.output_dir.exists():
+        shutil.rmtree(args.output_dir)
+        print(f"Deleted {args.output_dir} (--refresh)")
 
     result = aggregate_all_levels(
         csv_path=args.csv_path,

@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BASE = Path(__file__).resolve().parent.parent.parent / "sample-csv"
+BASE = Path(__file__).resolve().parent.parent.parent.parent / "sample-csv"
 CONN_STR = (
     f"host={os.environ.get('PGHOST', 'localhost')} "
     f"dbname={os.environ.get('PGDATABASE', 'pprcv_local')} "
