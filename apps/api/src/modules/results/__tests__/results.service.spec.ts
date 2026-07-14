@@ -5,7 +5,7 @@ describe('ResultsService', () => {
   let service: ResultsService;
 
   beforeEach(async () => {
-    process.env.PARQUET_BASE_PATH = './output';
+    process.env.PARQUET_BASE_PATH = './apps/etl/output';
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [ResultsService],
@@ -52,7 +52,7 @@ describe('ResultsService', () => {
   describe('buildContestQuery', () => {
     it('should build correct SQL with no params (national)', () => {
       const { sql } = (service as any).buildContestQuery({});
-      expect(sql).toContain("SELECT DISTINCT contest_code FROM './output/national/**/*.parquet'");
+      expect(sql).toContain("SELECT DISTINCT contest_code FROM './apps/etl/output/national/**/*.parquet'");
     });
 
     it('should build correct SQL with region filter', () => {
@@ -73,7 +73,7 @@ describe('ResultsService', () => {
   describe('buildQuery', () => {
     it('should generate correct SQL for national level', () => {
       const { sql, level } = (service as any).buildQuery({ level: 'national' });
-      expect(sql).toContain("FROM './output/national/**/*.parquet'");
+      expect(sql).toContain("FROM './apps/etl/output/national/**/*.parquet'");
       expect(sql).toContain('SELECT contest_code');
       expect(sql).toContain('GROUP BY contest_code');
       expect(sql).toContain('ORDER BY contest_code');

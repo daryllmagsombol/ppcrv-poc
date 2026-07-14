@@ -12,7 +12,7 @@ from pathlib import Path
 
 import psycopg2
 
-BASE = Path(__file__).resolve().parent.parent / "sample-csv"
+BASE = Path(__file__).resolve().parent.parent.parent / "sample-csv"
 CONN_STR = "host=localhost dbname=pprcv_local user=daryllmagsombol"
 
 CREATE_SQL = """

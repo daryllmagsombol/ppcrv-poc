@@ -4,7 +4,7 @@ from pathlib import Path
 
 import duckdb
 
-from src.etl.models import AggregationResult
+from .models import AggregationResult
 
 
 def _collect_parquet_files(root: Path) -> list[str]:
