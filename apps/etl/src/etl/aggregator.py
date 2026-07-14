@@ -5,7 +5,7 @@ from typing import Optional
 
 import duckdb
 
-from src.etl.models import LevelResult, MultiLevelAggregationResult
+from .models import LevelResult, MultiLevelAggregationResult
 
 
 def _collect_parquet_files(root: Path) -> list[str]:

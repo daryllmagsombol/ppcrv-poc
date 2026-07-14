@@ -53,7 +53,7 @@ export class ResultsService {
     // Default: resolve relative to project root (2 levels up from apps/api/)
     this.parquetBase =
       process.env.PARQUET_BASE_PATH ||
-      path.resolve(__dirname, '..', '..', '..', '..', '..', 'output');
+      path.resolve(__dirname, '..', '..', '..', '..', '..', 'apps', 'etl', 'output');
 
     try {
       const namesPath = path.resolve(__dirname, '..', '..', '..', '..', '..', 'data', 'contest-names.json');

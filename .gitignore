@@ -1,6 +1,7 @@
 .commandcode/
 .pytest_cache/
 output/
+__pycache__/
 sample-csv/results.csv
 output.txt
 

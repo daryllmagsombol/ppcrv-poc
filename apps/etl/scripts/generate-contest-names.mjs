@@ -3,8 +3,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const csvPath = join(__dirname, '..', 'sample-csv', 'contest.csv');
-const outputPath = join(__dirname, '..', 'data', 'contest-names.json');
+const csvPath = join(__dirname, '..', '..', '..', 'sample-csv', 'contest.csv');
+const outputPath = join(__dirname, '..', '..', '..', 'data', 'contest-names.json');
 
 function parseCSVLine(line) {
   const cols = [];

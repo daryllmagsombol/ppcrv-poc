@@ -54,10 +54,10 @@ erDiagram
 
 | Table | Rows | Source CSV | Load Script |
 |-------|------|------------|-------------|
-| `ref_parties` | ~339 | `sample-csv/parties.csv` | `scripts/load_ref_data.py` |
-| `ref_contests` | ~5,645 | `sample-csv/contest.csv` | `scripts/load_ref_data.py` |
-| `ref_precincts` | ~93,629 | `sample-csv/precincts.csv` | `scripts/load_ref_data.py` |
-| `ref_candidates` | ~41,647 | `sample-csv/candidates.csv` | `scripts/load_ref_data.py` |
+| `ref_parties` | ~339 | `sample-csv/parties.csv` | `apps/etl/scripts/load_ref_data.py` |
+| `ref_contests` | ~5,645 | `sample-csv/contest.csv` | `apps/etl/scripts/load_ref_data.py` |
+| `ref_precincts` | ~93,629 | `sample-csv/precincts.csv` | `apps/etl/scripts/load_ref_data.py` |
+| `ref_candidates` | ~41,647 | `sample-csv/candidates.csv` | `apps/etl/scripts/load_ref_data.py` |
 
 ### Relationships
 
@@ -73,7 +73,7 @@ DuckDB is used in two phases:
 1. **ETL phase** — Python `duckdb` library creates in-memory tables, joins, aggregates, and writes Parquet files
 2. **API phase** — NestJS shells out to `duckdb` CLI to query Parquet files on-read
 
-### 2A. Simple Aggregation (`src/etl/processor.py`)
+### 2A. Simple Aggregation (`apps/etl/src/etl/processor.py`)
 
 ```mermaid
 erDiagram
@@ -114,7 +114,7 @@ erDiagram
     agg_data ||--o| parquet_single_level : "COPY TO Parquet (partitioned by contest_code)"
 ```
 
-### 2B. Multi-Level Aggregation (`src/etl/aggregator.py`)
+### 2B. Multi-Level Aggregation (`apps/etl/src/etl/aggregator.py`)
 
 This is the **primary pipeline**. It joins raw results with precinct reference data, then produces 6 hierarchical aggregation levels.
 
@@ -244,7 +244,7 @@ erDiagram
 All 6 aggregation levels are written as **Hive-partitioned Parquet** files:
 
 ```
-output/multi-level/
+apps/etl/output/multi-level/
 ├── national/           # contest_code=XXX/*.parquet
 ├── region/             # contest_code=XXX/*.parquet
 ├── province/           # contest_code=XXX/*.parquet

@@ -8,12 +8,20 @@ Usage:
 
 import argparse
 import csv
+import os
 from pathlib import Path
 
 import psycopg2
+from dotenv import load_dotenv
 
-BASE = Path(__file__).resolve().parent.parent / "sample-csv"
-CONN_STR = "host=localhost dbname=pprcv_local user=daryllmagsombol"
+load_dotenv()
+
+BASE = Path(__file__).resolve().parent.parent.parent / "sample-csv"
+CONN_STR = (
+    f"host={os.environ.get('PGHOST', 'localhost')} "
+    f"dbname={os.environ.get('PGDATABASE', 'pprcv_local')} "
+    f"user={os.environ.get('PGUSER', os.environ.get('USER', 'daryllmagsombol'))}"
+)
 
 CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS ref_parties (

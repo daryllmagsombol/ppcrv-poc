@@ -158,11 +158,11 @@ Each entry follows this structure:
 ## 2026-07-13 — Fixed ETL OOM on full dataset, corrected Parquet paths, updated docs
 
 **Files changed:**
-- `src/etl/aggregator.py` — rewrote for memory efficiency
+- `apps/etl/src/etl/aggregator.py` — rewrote for memory efficiency
 - `apps/api/src/modules/results/results.service.ts` — parquetBase path fix
 - `apps/web/src/app/results/page.tsx` — defensive filters + API error handling
-- `scripts/run_aggregation.py` — float formatting fix
-- `etl/USE.md` — major rewrite for multi-level aggregator + memory notes
+- `apps/etl/scripts/run_aggregation.py` — float formatting fix
+- `apps/etl/USE.md` — major rewrite for multi-level aggregator + memory notes
 - `docs/DEV-SETUP.md` — path fixes
 - `docs/CHANGES.md` — new entry
 - `README.md` — quick start path fix
@@ -172,7 +172,7 @@ Each entry follows this structure:
 
 ### What changed
 
-**ETL memory fix (`src/etl/aggregator.py`):**
+**ETL memory fix (`apps/etl/src/etl/aggregator.py`):**
 - Removed `CREATE TABLE joined_data AS ...` — was materializing all 24M rows × 10 VARCHAR columns (~8GB+)
 - Each level now does JOIN+GROUP BY inline via subquery — DuckDB pipelines streaming hash join
 - Per-level DuckDB connection (fresh `connect()` / `close()` per level) so memory is freed between levels
@@ -181,26 +181,26 @@ Each entry follows this structure:
 - All 6 levels verified: national=1,147,001,580, region=1,147,001,580, province=1,147,001,580, municipality=1,147,001,580, barangay=1,147,001,580, precinct=1,147,001,580
 
 **API path fix (`apps/api/src/modules/results/results.service.ts`):**
-- Changed `parquetBase` from `output/multi-level` → `output` to match new ETL output location
+- Changed `parquetBase` from `apps/etl/output/multi-level` → `apps/etl/output` to match new ETL output location
 
 **Frontend defensive fix (`apps/web/src/app/results/page.tsx`):**
 - Changed `{results && <BreadcrumbNav ...>` to `{results?.filters && ...}` — guards against API error responses that are truthy but lack `filters`
 - Added `if (!res.ok) throw new Error(...)` so failed API calls don't silently set invalid state
 
-**Script fix (`scripts/run_aggregation.py`):**
+**Script fix (`apps/etl/scripts/run_aggregation.py`):**
 - Fixed print format: `{level.total_votes:>10,d}` → `{int(round(level.total_votes)):>10,d}` for DuckDB float totals
 - Changed summary line to show national total instead of sum across all 6 levels
 
 **Docs updated:**
-- `etl/USE.md` — Full rewrite: multi-level aggregator as primary path, streaming approach documented, performance/memory notes (~1:40, ~6GB), API integration section, updated inspect commands, expanded test table
-- `docs/DEV-SETUP.md` — 3 path fixes: `output/multi-level` → `output` (CLI command, env var default, DuckDB glob example)
-- `README.md` — Quick start command: `output/multi-level --sample 100000` → `output --sample 100000`
+- `apps/etl/USE.md` — Full rewrite: multi-level aggregator as primary path, streaming approach documented, performance/memory notes (~1:40, ~6GB), API integration section, updated inspect commands, expanded test table
+- `docs/DEV-SETUP.md` — 3 path fixes: `apps/etl/output/multi-level` → `apps/etl/output` (CLI command, env var default, DuckDB glob example)
+- `README.md` — Quick start command: `apps/etl/output/multi-level --sample 100000` → `apps/etl/output --sample 100000`
 
 ### Why
 - Full aggregation was never run — existing Parquet was from a `--sample 100000` during POC dev
 - Intermediate `joined_data` table consumed ~8GB+ for VARCHAR columns, hitting 12.7GB system memory limit
 - Streaming JOIN avoids materializing all rows; DuckDB pipelines the hash join directly into GROUP BY
-- Path mismatch (`output/multi-level` vs `output`) broke API after re-running aggregation to the correct location
+- Path mismatch (`apps/etl/output/multi-level` vs `apps/etl/output`) broke API after re-running aggregation to the correct location
 
 ---
 
@@ -209,8 +209,8 @@ Each entry follows this structure:
 **Files changed:**
 - `docs/CHANGES.md`, `docs/superpowers/specs/2026-07-09-multi-level-aggregation-design.md` (new),
   `docs/superpowers/plans/2026-07-09-multi-level-aggregation-plan.md` (new)
-- `src/etl/models.py`, `src/etl/aggregator.py` (new), `scripts/run_aggregation.py` (new)
-- `tests/etl/test_aggregator.py` (new), `tests/etl/fixtures/precincts.csv`
+- `apps/etl/src/etl/models.py`, `apps/etl/src/etl/aggregator.py` (new), `apps/etl/scripts/run_aggregation.py` (new)
+- `apps/etl/tests/test_aggregator.py` (new), `apps/etl/tests/fixtures/precincts.csv`
 - `apps/api/` — full NestJS app: `main.ts`, `app.module.ts`, `modules/results/` (controller, service, DTOs, tests)
 - `apps/web/` — full Next.js app: root layout, homepage, `app/results/` page with `SelectionPanel`, `CascadingDropdown`, `ResultsTable`, `BreadcrumbNav`
 - Monorepo root: `package.json`, `pnpm-workspace.yaml`, `turbo.json`, `.npmrc`
@@ -221,13 +221,13 @@ Each entry follows this structure:
 
 ### What changed
 
-**Multi-level ETL (`src/etl/aggregator.py`):**
+**Multi-level ETL (`apps/etl/src/etl/aggregator.py`):**
 - `aggregate_all_levels()` — single-pass DuckDB aggregation for all 6 levels (national, region, province, municipality, barangay, precinct)
 - LPAD join on precinct codes (8 chars) via `results` + `precincts` CSV join
 - Hive-partitioned Parquet output by `contest_code`
-- `LevelResult` and `MultiLevelAggregationResult` dataclasses in `src/etl/models.py`
-- 7 pytest tests in `tests/etl/test_aggregator.py`
-- `scripts/run_aggregation.py` CLI entry point with `--sample` flag
+- `LevelResult` and `MultiLevelAggregationResult` dataclasses in `apps/etl/src/etl/models.py`
+- 7 pytest tests in `apps/etl/tests/test_aggregator.py`
+- `apps/etl/scripts/run_aggregation.py` CLI entry point with `--sample` flag
 
 **NestJS API (`apps/api/`):**
 - `ResultsService` — shells out to `duckdb` CLI with `-json` flag for on-read Parquet queries
@@ -249,9 +249,9 @@ Each entry follows this structure:
 - `.npmrc` with `shamefully-hoist=true` for NestJS compat
 
 **Today's fixes (2026-07-09 session):**
-- Fixed `parquetBase` path resolution from `__dirname` to point at project root `output/multi-level/`
+- Fixed `parquetBase` path resolution from `__dirname` to point at project root `apps/etl/output/multi-level/`
 - Changed all DuckDB file globs from `/*.parquet` to `/**/*.parquet` to handle Hive-partitioned subdirectories
-- Ran `scripts/run_aggregation.py` with 100k sample rows → generated all 6 levels of partitioned Parquet
+- Ran `apps/etl/scripts/run_aggregation.py` with 100k sample rows → generated all 6 levels of partitioned Parquet
 - Verified all API endpoints respond correctly with live data (3,193 contests, 17 regions, cascading geo queries, results aggregation)
 
 ### Why
@@ -264,28 +264,28 @@ Each entry follows this structure:
 
 ## 2026-07-09 — Added local ETL testing setup with DuckDB + Postgres
 
-**Files changed:** `pyproject.toml` (new), `src/etl/__init__.py` (new), `src/etl/models.py` (new), `src/etl/processor.py` (new), `tests/etl/__init__.py` (new), `tests/etl/test_processor.py` (new), `tests/etl/fixtures/sample.csv` (new), `tests/etl/fixtures/multiple.csv` (new), `tests/etl/fixtures/edge.csv` (new), `scripts/load_ref_data.py` (new), `etl/USE.md` (new), `docs/CHANGES.md`, `docs/superpowers/specs/2026-07-09-etl-local-testing-design.md` (new), `docs/superpowers/plans/2026-07-09-etl-local-testing.md` (new)
+**Files changed:** `apps/etl/pyproject.toml` (new), `apps/etl/src/etl/__init__.py` (new), `apps/etl/src/etl/models.py` (new), `apps/etl/src/etl/processor.py` (new), `apps/etl/tests/__init__.py` (new), `apps/etl/tests/test_processor.py` (new), `apps/etl/tests/fixtures/sample.csv` (new), `apps/etl/tests/fixtures/multiple.csv` (new), `apps/etl/tests/fixtures/edge.csv` (new), `apps/etl/scripts/load_ref_data.py` (new), `apps/etl/USE.md` (new), `docs/CHANGES.md`, `docs/superpowers/specs/2026-07-09-etl-local-testing-design.md` (new), `docs/superpowers/plans/2026-07-09-etl-local-testing.md` (new)
 **Author:** Team Leader (subagents)
 **Summary:** Set up local ETL testing infrastructure for PPCRV v3 election monitoring using DuckDB (CSV → Parquet aggregation) and Postgres (reference data). Pure Python + pytest, no Docker or cloud SDK needed.
 
 ### What changed
 
 **Project scaffold:**
-- `pyproject.toml` with dev deps: duckdb, pytest, pyarrow, psycopg2-binary
-- Package structure under `src/etl/` and `tests/etl/`
+- `apps/etl/pyproject.toml` with dev deps: duckdb, pytest, pyarrow, psycopg2-binary
+- Package structure under `apps/etl/src/etl/` and `apps/etl/tests/`
 
-**Data models (`src/etl/models.py`):**
+**Data models (`apps/etl/src/etl/models.py`):**
 - `AggregationResult` dataclass with `total_votes`, `precinct_count`, `contest_count`, `output_files`
 
-**Core processor (`src/etl/processor.py`):**
+**Core processor (`apps/etl/src/etl/processor.py`):**
 - `parse_and_aggregate(csv_path, output_dir, partition_by)` — reads CSV via DuckDB `read_csv_auto`, aggregates `SUM(VOTES_AMOUNT)` grouped by precinct/contest/candidate/party, writes partitioned Parquet files
 
-**Postgres reference data loader (`scripts/load_ref_data.py`):**
+**Postgres reference data loader (`apps/etl/scripts/load_ref_data.py`):**
 - Idempotent loader (`INSERT ... ON CONFLICT DO NOTHING`) for `pprcv_local` DB
 - Loads 4 reference tables (parties, contests, precincts, candidates) from `sample-csv/`
 - Fixes party-list candidates with empty `PARTIES_CODE` → SQL NULL (FK constraint)
 
-**Test suite (`tests/etl/test_processor.py`):**
+**Test suite (`apps/etl/tests/test_processor.py`):**
 - 6 pytest tests: simple aggregation, multiple precincts, empty CSV, valid Parquet, idempotent output, real-world `results.csv`
 
 **Design docs:**
