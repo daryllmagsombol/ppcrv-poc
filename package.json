@@ -11,12 +11,17 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,json}\""
   },
   "devDependencies": {
-    "prettier": "^3.2.0",
-    "turbo": "^2.0.0"
+    "prettier": "^3.6.0",
+    "turbo": "^2.10.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "postcss": "^8.5.10"
+    }
   },
   "engines": {
-    "node": ">=18",
-    "pnpm": ">=8"
+    "node": ">=20",
+    "pnpm": ">=9"
   },
   "packageManager": "pnpm@9.1.0"
 }

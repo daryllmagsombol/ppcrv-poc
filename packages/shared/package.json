@@ -9,6 +9,6 @@
     "lint": "echo \"No lint yet\""
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^5.7.0"
   }
 }
