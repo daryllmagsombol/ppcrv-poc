@@ -49,8 +49,15 @@ export class ScanService implements OnModuleInit {
   }
 
   async compare(dto: ScanCompareDto): Promise<ComparisonResult> {
+    // Auto-detect precinct from QR if not provided
+    let precinctId = dto.precinct_id;
+    if (precinctId === 'auto-detect' || !precinctId) {
+      const detected = this.extractPrecinctFromQr(dto);
+      if (detected) precinctId = detected;
+    }
+
     const qrParsed = this.parseQrData(dto);
-    const dbResults = await this.queryPrecinctResults(dto.precinct_id);
+    const dbResults = await this.queryPrecinctResults(precinctId);
     const discrepancies = this.findDiscrepancies(qrParsed, dbResults);
 
     // Look up geography for the response
@@ -59,7 +66,7 @@ export class ScanService implements OnModuleInit {
       const geo = await this.pool.query(
         `SELECT reg_name, prv_name, mun_name, brgy_name, pollplace
          FROM ref_precincts WHERE acm_id = $1`,
-        [dto.precinct_id],
+        [precinctId],
       );
       if (geo.rows.length > 0) {
         region = geo.rows[0].reg_name;
@@ -73,7 +80,7 @@ export class ScanService implements OnModuleInit {
     }
 
     return {
-      precinct_id: dto.precinct_id,
+      precinct_id: precinctId,
       region,
       province,
       municipality,
@@ -120,6 +127,15 @@ export class ScanService implements OnModuleInit {
     const results: ContestResult[] = [];
     for (const raw of [dto.qr_raw_1, dto.qr_raw_2, dto.qr_raw_3]) {
       if (!raw) continue;
+
+      // Try VCM format first: "CATEGORY\ncontest_code:pos=votes|pos=votes|..."
+      const vcmResult = this.parseVcmFormat(raw);
+      if (vcmResult) {
+        results.push(vcmResult);
+        continue;
+      }
+
+      // Try JSON format (legacy/test data)
       try {
         const parsed = JSON.parse(raw);
         const items = Array.isArray(parsed) ? parsed : [parsed];
@@ -138,6 +154,7 @@ export class ScanService implements OnModuleInit {
           }
         }
       } catch {
+        // Store raw if nothing else works
         results.push({
           contest_code: 'RAW',
           contest_name: 'Unparsed QR Data',
@@ -147,6 +164,63 @@ export class ScanService implements OnModuleInit {
       }
     }
     return results;
+  }
+
+  /**
+   * Parse VCM receipt QR format:
+   * Line 1: Category name (e.g., "NATIONAL", "PARTY LIST")
+   * Line 2: contest_code:position=votes|position=votes|...
+   */
+  private parseVcmFormat(raw: string): ContestResult | null {
+    const lines = raw.trim().split('\n');
+    if (lines.length < 2) return null;
+
+    const category = lines[0].trim();
+    const dataLine = lines[1].trim();
+
+    // Match: contest_code:pos1=votes1|pos2=votes2|...
+    const match = dataLine.match(/^(\d+):(.+)$/);
+    if (!match) return null;
+
+    const contestCode = match[1].padStart(8, '0');
+    const pairs = match[2].split('|');
+
+    const candidates = pairs
+      .map(pair => {
+        const [pos, votes] = pair.split('=');
+        return {
+          candidate: `Position ${pos}`,
+          party: '',
+          votes: Number(votes) || 0,
+        };
+      })
+      .filter(c => c.votes > 0); // Only include positions with votes
+
+    return {
+      contest_code: contestCode,
+      contest_name: category,
+      category: this.categoryFromCode(contestCode),
+      candidates,
+    };
+  }
+
+  /**
+   * Extract precinct ID from VCM metadata QR code.
+   * Format: type,precinct_id,report_hash,result_hash,RV=...|CB=...|...
+   */
+  extractPrecinctFromQr(dto: ScanCompareDto): string | null {
+    for (const raw of [dto.qr_raw_1, dto.qr_raw_2, dto.qr_raw_3]) {
+      if (!raw) continue;
+      const lines = raw.trim().split('\n');
+      // Metadata QR is typically the last one and has comma-separated values
+      for (const line of lines) {
+        const parts = line.split(',');
+        if (parts.length >= 2 && /^\d{8}$/.test(parts[1].trim())) {
+          return parts[1].trim();
+        }
+      }
+    }
+    return null;
   }
 
   private async queryPrecinctResults(precinctId: string): Promise<ContestResult[]> {
