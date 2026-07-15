@@ -79,6 +79,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Load review context
+        id: review-context
+        run: |
+          if [ -f .github/REVIEW_HISTORY.md ]; then
+            echo "context<<EOF" >> $GITHUB_OUTPUT
+            cat .github/REVIEW_HISTORY.md >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "context=No previous review history." >> $GITHUB_OUTPUT
+          fi
+
       - name: AI Code Review
         uses: anomalyco/opencode/github@v1.17.8
         env:
@@ -97,6 +108,10 @@ jobs:
             - Security vulnerabilities
             - Missing error handling
 
+            PREVIOUSLY RESOLVED ISSUES (do NOT re-flag these):
+            ${{ steps.review-context.outputs.context }}
+
+            Only flag NEW issues not listed above.
             Be conservative — only flag things you're 90%+ sure about.
             Skip style, formatting, and naming nits.
             If the code looks good, say LGTM.
