@@ -5,7 +5,12 @@ import { SelectionPanel } from './components/selection-panel';
 import { ResultsTable } from './components/results-table';
 import { BreadcrumbNav } from './components/breadcrumb-nav';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+function getApiUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window !== 'undefined') return `http://${window.location.hostname}:3001/api`;
+  return 'http://localhost:3001/api';
+}
+const API = getApiUrl();
 
 interface ContestGroup {
   code: string;

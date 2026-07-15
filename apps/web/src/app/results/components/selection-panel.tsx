@@ -7,7 +7,12 @@ interface SelectionPanelProps {
   onSelectionChange: (filters: Record<string, string>) => void;
 }
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+function getApiUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window !== 'undefined') return `http://${window.location.hostname}:3001/api`;
+  return 'http://localhost:3001/api';
+}
+const API = getApiUrl();
 
 async function fetchJson(url: string): Promise<any> {
   const res = await fetch(url);

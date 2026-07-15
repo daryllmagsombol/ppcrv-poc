@@ -5,7 +5,12 @@ import { QRScanner } from './components/qr-scanner';
 import { ScanProgress } from './components/scan-progress';
 import { ComparisonView } from './components/comparison-view';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+function getApiUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window !== 'undefined') return `http://${window.location.hostname}:3001/api`;
+  return 'http://localhost:3001/api';
+}
+const API_URL = getApiUrl();
 const TOTAL_QRS = 3;
 
 type Stage = 'idle' | 'scanning' | 'comparing' | 'uploading' | 'done' | 'uploaded' | 'error';
