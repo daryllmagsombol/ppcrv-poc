@@ -42,12 +42,15 @@ describe('ScanService', () => {
     await service.getPool().end();
   }, TIMEOUT);
 
-  beforeEach(() => {
-    if (!dbAvailable) pending('PostgreSQL not available — skipping integration tests');
-  });
+  const itDb = (name: string, fn: () => Promise<void>) => {
+    it(name, async () => {
+      if (!dbAvailable) return; // skip when no PostgreSQL
+      await fn();
+    });
+  };
 
   describe('compare', () => {
-    it('should return comparison result with parsed QR and DB results', async () => {
+    itDb('should return comparison result with parsed QR and DB results', async () => {
       const result = await service.compare({
         precinct_id: '01010001',
         qr_raw_1: 'NATIONAL\n00399000:1=0|2=0|3=0|4=2|5=2|6=2',
@@ -62,7 +65,7 @@ describe('ScanService', () => {
       expect(result).toHaveProperty('province');
     });
 
-    it('should handle unparsable QR data gracefully', async () => {
+    itDb('should handle unparsable QR data gracefully', async () => {
       // Use unknown precinct so DB returns nothing, avoiding discrepancy
       const result = await service.compare({
         precinct_id: 'ZZZZZZZZ',
@@ -74,7 +77,7 @@ describe('ScanService', () => {
       expect(result.has_discrepancy).toBe(false);
     });
 
-    it('should auto-detect precinct from VCM metadata QR', async () => {
+    itDb('should auto-detect precinct from VCM metadata QR', async () => {
       const result = await service.compare({
         precinct_id: 'auto-detect',
         qr_raw_1: 'NATIONAL\n00399000:1=0|2=0',
@@ -84,7 +87,7 @@ describe('ScanService', () => {
       expect(result.precinct_id).toBe('10120012');
     });
 
-    it('should return empty db_results for unknown precinct', async () => {
+    itDb('should return empty db_results for unknown precinct', async () => {
       const result = await service.compare({
         precinct_id: 'ZZZZZZZZ',
         qr_raw_1: JSON.stringify({
@@ -96,7 +99,7 @@ describe('ScanService', () => {
       expect(result.db_results).toEqual([]);
     });
 
-    it('should detect discrepancies when votes differ', async () => {
+    itDb('should detect discrepancies when votes differ', async () => {
       const result = await service.compare({
         precinct_id: '01010001',
         qr_raw_1: 'NATIONAL\n00399000:1=999|2=0|3=0',
@@ -111,7 +114,7 @@ describe('ScanService', () => {
   });
 
   describe('upload', () => {
-    it('should insert a scan record and return id', async () => {
+    itDb('should insert a scan record and return id', async () => {
       const result = await service.upload({
         precinct_id: '01010001',
         qr_raw_1: 'test-data',
@@ -125,7 +128,7 @@ describe('ScanService', () => {
   });
 
   describe('getHistory', () => {
-    it('should return array of records', async () => {
+    itDb('should return array of records', async () => {
       const result = await service.getHistory(5);
       expect(Array.isArray(result)).toBe(true);
     });

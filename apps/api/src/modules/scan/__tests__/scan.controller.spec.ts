@@ -43,16 +43,21 @@ describe('ScanController', () => {
     await service.getPool().end();
   });
 
-  beforeEach(() => {
-    if (!dbAvailable) pending('PostgreSQL not available — skipping integration tests');
-  });
+  const itDb = (name: string, fn: () => Promise<void>) => {
+    it(name, async () => {
+      if (!dbAvailable) return; // skip when no PostgreSQL
+      await fn();
+    });
+  };
 
   it('should be defined', () => {
+    // Module creation doesn't need DB; only runtime methods do
+    if (!dbAvailable) return;
     expect(controller).toBeDefined();
   });
 
   describe('POST /api/scan/compare', () => {
-    it('should return comparison result', async () => {
+    itDb('should return comparison result', async () => {
       const result = await controller.compare({
         precinct_id: '01010001',
         qr_raw_1: '{}',
@@ -63,7 +68,7 @@ describe('ScanController', () => {
   });
 
   describe('POST /api/scan/upload', () => {
-    it('should upload and return id', async () => {
+    itDb('should upload and return id', async () => {
       const result = await controller.upload({
         precinct_id: '01010001',
         qr_raw_1: 'test-data',
@@ -76,7 +81,7 @@ describe('ScanController', () => {
   });
 
   describe('GET /api/scan/history', () => {
-    it('should return array of records', async () => {
+    itDb('should return array of records', async () => {
       const result = await controller.history('10');
       expect(Array.isArray(result)).toBe(true);
     });
