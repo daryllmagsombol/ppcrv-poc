@@ -4,7 +4,7 @@ import { execFileSync } from 'child_process';
 import * as path from 'path';
 import { ScanCompareDto } from './dto/scan-compare.dto';
 import { ScanUploadDto } from './dto/scan-upload.dto';
-import { ComparisonResult, ContestResult, CandidateVote, Discrepancy } from './interfaces';
+import { ComparisonResult, ContestResult, CandidateVote, Discrepancy, VcmMetadata } from './interfaces';
 
 @Injectable()
 export class ScanService implements OnModuleInit {
@@ -58,7 +58,18 @@ export class ScanService implements OnModuleInit {
 
     const qrParsed = this.parseQrData(dto);
     const dbResults = await this.queryPrecinctResults(precinctId);
+
+    // Resolve VCM position numbers to real candidate names
+    await this.resolveQrPositions(qrParsed);
+
     const discrepancies = this.findDiscrepancies(qrParsed, dbResults);
+
+    // Parse metadata QR (try all 3, pick the first match)
+    const qrMetadata =
+      this.parseMetadataQr(dto.qr_raw_1 || '') ??
+      this.parseMetadataQr(dto.qr_raw_2 || '') ??
+      this.parseMetadataQr(dto.qr_raw_3 || '') ??
+      undefined;
 
     // Look up geography for the response
     let region, province, municipality, barangay, pollplace;
@@ -87,6 +98,7 @@ export class ScanService implements OnModuleInit {
       barangay,
       pollplace,
       qr_parsed: qrParsed,
+      qr_metadata: qrMetadata,
       db_results: dbResults,
       has_discrepancy: discrepancies.length > 0,
       discrepancy_details: discrepancies,
@@ -128,7 +140,10 @@ export class ScanService implements OnModuleInit {
     for (const raw of [dto.qr_raw_1, dto.qr_raw_2, dto.qr_raw_3]) {
       if (!raw) continue;
 
-      // Try VCM format first: "CATEGORY\ncontest_code:pos=votes|pos=votes|..."
+      // Skip metadata QR — it's parsed separately as VcmMetadata
+      if (this.parseMetadataQr(raw)) continue;
+
+      // Try VCM format: "CATEGORY\ncontest_code:pos=votes|pos=votes|..."
       const vcmResult = this.parseVcmFormat(raw);
       if (vcmResult) {
         results.push(vcmResult);
@@ -167,16 +182,92 @@ export class ScanService implements OnModuleInit {
   }
 
   /**
-   * Parse VCM receipt QR format:
-   * Line 1: Category name (e.g., "NATIONAL", "PARTY LIST")
-   * Line 2: contest_code:position=votes|position=votes|...
+   * Parse VCM report metadata QR (QR3).
+   * Format: type,precinct_id,report_hash,result_hash,RV=x|CB=x|RB=x|VT=x
+   * Example: 12,10120012,BFB59…,CF765…,RV=922|CB=3|RB=0|VT=0.33
+   */
+  private parseMetadataQr(raw: string): VcmMetadata | null {
+    const text = raw.trim();
+
+    // Format: at least 5 comma-separated parts
+    const parts = text.split(',');
+    if (parts.length < 5) return null;
+
+    const type = parts[0].trim();
+    const precinctId = parts[1].trim();
+    const reportHash = parts.slice(2, -1).join(','); // everything after precinct, before last stats block
+    const statsPart = parts[parts.length - 1].trim(); // RV=x|CB=x|RB=x|VT=x
+
+    // The report_hash and result_hash are the 3rd and 4th fields
+    // Re-slice correctly: [type, precinct, report_hash, result_hash, stats]
+    const parts2 = text.split(',');
+    if (parts2.length < 5) return null;
+
+    const precinctId2 = parts2[1].trim();
+    const reportHash2 = parts2[2]?.trim() || '';
+    const resultHash2 = parts2[3]?.trim() || '';
+    const statsStr = parts2.slice(4).join(',').trim();
+    const type2 = parts2[0].trim();
+
+    // Validate: precinct must look like a precinct ID (8+ digits)
+    if (!/^\d{8,}$/.test(precinctId2)) return null;
+
+    // Parse stats: RV=x|CB=x|RB=x|VT=x
+    const stats: Record<string, number> = { RV: 0, CB: 0, RB: 0, VT: 0 };
+    const statPairs = statsStr.split('|');
+    for (const pair of statPairs) {
+      const eqIdx = pair.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = pair.slice(0, eqIdx).trim();
+      const val = parseFloat(pair.slice(eqIdx + 1).trim());
+      if (!isNaN(val) && key in stats) {
+        stats[key] = val;
+      }
+    }
+
+    return {
+      type: type2,
+      precinct_id: precinctId2,
+      report_hash: reportHash2,
+      result_hash: resultHash2,
+      registered_voters: stats.RV,
+      cast_ballots: stats.CB,
+      remaining_ballots: stats.RB,
+      voter_turnout_pct: stats.VT,
+    };
+  }
+
+  /**
+   * Parse VCM receipt QR format.
+   *
+   * Supported formats:
+   *   Format A (two lines):
+   *     Line 1: Category name (e.g., "NATIONAL", "PARTY LIST")
+   *     Line 2: contest_code:position=votes|position=votes|...
+   *
+   *   Format B (single line):
+   *     "CATEGORY contest_code:position=votes|..."
    */
   private parseVcmFormat(raw: string): ContestResult | null {
-    const lines = raw.trim().split('\n');
-    if (lines.length < 2) return null;
+    const text = raw.trim();
+    let category = '';
+    let dataLine = '';
 
-    const category = lines[0].trim();
-    const dataLine = lines[1].trim();
+    const lines = text.split('\n');
+
+    if (lines.length >= 2) {
+      // Format A: category on line 1, data on line 2
+      category = lines[0].trim();
+      dataLine = lines[1].trim();
+    } else {
+      // Format B: single line — find where "contest_code:" starts
+      const colonMatch = text.match(/\s(\d+:[0-9|=|]+)$/);
+      if (!colonMatch) return null;
+
+      const colonIndex = text.lastIndexOf(colonMatch[0]);
+      category = text.slice(0, colonIndex).trim();
+      dataLine = text.slice(colonIndex).trim();
+    }
 
     // Match: contest_code:pos1=votes1|pos2=votes2|...
     const match = dataLine.match(/^(\d+):(.+)$/);
@@ -194,7 +285,7 @@ export class ScanService implements OnModuleInit {
           votes: Number(votes) || 0,
         };
       })
-      .filter(c => c.votes > 0); // Only include positions with votes
+      .filter(c => c.votes > 0);
 
     return {
       contest_code: contestCode,
@@ -251,7 +342,7 @@ export class ScanService implements OnModuleInit {
           AND brgy_name = '${esc(brgy_name)}'
           AND pollplace = '${esc(pollplace)}'
         GROUP BY contest_code, candidate_name, party_code
-        ORDER BY contest_code, votes DESC
+        ORDER BY contest_code, candidate_name
       `.trim().replace(/\s+/g, ' ');
 
       const output = execFileSync('duckdb', ['-json', '-c', sql], {
@@ -271,7 +362,7 @@ export class ScanService implements OnModuleInit {
       for (const [code, contestRows] of contestMap) {
         results.push({
           contest_code: code,
-          contest_name: code,
+          contest_name: this.categoryFromCode(code),
           category: this.categoryFromCode(code),
           candidates: contestRows.map(r => ({
             candidate: r.candidate_name,
@@ -301,6 +392,41 @@ export class ScanService implements OnModuleInit {
       '011': 'Party List',
     };
     return map[prefix] || 'Unknown';
+  }
+
+  /**
+   * For each parsed VCM result, look up ref_candidates ordered by
+   * candidate_code and replace "Position X" with the actual candidate name.
+   * Contests not in ref_candidates keep the "Position X" label as-is.
+   */
+  private async resolveQrPositions(qr: ContestResult[]): Promise<void> {
+    for (const contest of qr) {
+      const isPositionBased = contest.candidates.some(c =>
+        c.candidate.startsWith('Position '),
+      );
+      if (!isPositionBased) continue;
+
+      try {
+        const result = await this.pool.query(
+          `SELECT candidate_name FROM ref_candidates
+           WHERE contest_code = $1
+           ORDER BY candidate_code`,
+          [contest.contest_code],
+        );
+
+        if (result.rows.length === 0) continue;
+
+        // Replace "Position X" with the name at index (X-1)
+        for (const c of contest.candidates) {
+          const pos = parseInt(c.candidate.replace('Position ', ''), 10);
+          if (!isNaN(pos) && pos >= 1 && pos <= result.rows.length) {
+            c.candidate = result.rows[pos - 1].candidate_name;
+          }
+        }
+      } catch {
+        // Name resolution is best-effort
+      }
+    }
   }
 
   private findDiscrepancies(qr: ContestResult[], db: ContestResult[]): Discrepancy[] {

@@ -1,5 +1,22 @@
 'use client';
 
+/** Derive a human-readable contest label from the contest code */
+function contestLabel(code: string): string {
+  const prefix = code.slice(0, 3);
+  const map: Record<string, string> = {
+    '003': 'Senator',
+    '004': 'Governor',
+    '005': 'Vice Governor',
+    '006': 'Provincial Board',
+    '007': 'House of Reps',
+    '008': 'Mayor',
+    '009': 'Vice Mayor',
+    '010': 'Councilor',
+    '011': 'Party List',
+  };
+  return map[prefix] || `Contest ${code}`;
+}
+
 interface CandidateVote {
   candidate: string;
   party: string;
@@ -21,6 +38,17 @@ interface Discrepancy {
   db_votes: number;
 }
 
+interface VcmMetadata {
+  type: string;
+  precinct_id: string;
+  report_hash: string;
+  result_hash: string;
+  registered_voters: number;
+  cast_ballots: number;
+  remaining_ballots: number;
+  voter_turnout_pct: number;
+}
+
 interface ComparisonViewProps {
   precinct_id: string;
   region?: string;
@@ -32,6 +60,7 @@ interface ComparisonViewProps {
   db_results: ContestResult[];
   has_discrepancy: boolean;
   discrepancy_details: Discrepancy[];
+  qr_metadata?: VcmMetadata;
   onUpload: () => void;
   uploading?: boolean;
 }
@@ -56,16 +85,16 @@ function ContestTable({
   return (
     <div className="mb-6">
       <div className="mb-2 flex items-center gap-2">
-        <h3 className="font-serif text-base font-bold text-[#1B3A5C]">
+        <h3 className="font-display text-base font-bold text-ink">
           {contest.contest_name}
         </h3>
-        <span className="rounded bg-[#E8E5DE] px-2 py-0.5 text-xs font-semibold uppercase text-[#1B3A5C]">
+        <span className="rounded bg-field px-2 py-0.5 text-xs font-semibold uppercase text-ink">
           {contest.category}
         </span>
       </div>
-      <table className="w-full border-t-2 border-b-2 border-[#1B3A5C]">
+      <table className="w-full border-t-2 border-b-2 border-ink">
         <thead>
-          <tr className="text-left text-xs font-semibold uppercase tracking-widest text-[#1B3A5C]">
+          <tr className="text-left text-xs font-semibold uppercase tracking-widest text-ink">
             <th className="px-3 py-2">Candidate</th>
             <th className="px-3 py-2">Party</th>
             <th className="px-3 py-2 text-right">Votes</th>
@@ -77,11 +106,11 @@ function ContestTable({
             return (
               <tr
                 key={`${contest.contest_code}-${c.candidate}-${i}`}
-                className={`even:bg-[#E8E5DE] ${discrepant ? 'bg-red-100' : ''}`}
+                className={`even:bg-field ${discrepant ? 'bg-red-100' : ''}`}
               >
                 <td
                   className={`px-3 py-1.5 text-sm font-medium ${
-                    discrepant ? 'font-bold text-red-800' : 'text-[#1B3A5C]'
+                    discrepant ? 'font-bold text-red-800' : 'text-ink'
                   }`}
                 >
                   {c.candidate}
@@ -114,6 +143,7 @@ export function ComparisonView({
   db_results,
   has_discrepancy,
   discrepancy_details,
+  qr_metadata,
   onUpload,
   uploading,
 }: ComparisonViewProps) {
@@ -128,10 +158,10 @@ export function ComparisonView({
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="rounded-lg border border-gray-200 bg-[#F8F6F0] p-4">
+      <div className="rounded-lg border border-gray-200 bg-ballot p-4">
         <div className="flex items-start justify-between">
           <div>
-            <h2 className="font-serif text-xl font-bold text-[#1B3A5C]">
+            <h2 className="font-display text-xl font-bold text-ink">
               Precinct: {precinct_id}
             </h2>
             {region && (
@@ -159,7 +189,7 @@ export function ComparisonView({
           <p className="text-sm text-yellow-800">
             Some QR codes could not be parsed as structured data. Raw text is shown below.
           </p>
-          <pre className="mt-2 overflow-x-auto rounded bg-yellow-100 p-2 text-xs text-yellow-900">
+          <pre className="mt-2 max-h-48 overflow-y-auto overflow-x-auto rounded bg-yellow-100 p-2 text-xs text-yellow-900">
             {qr_parsed
               .filter(c => c.contest_code === 'RAW')
               .map(c => c.candidates.map(cd => cd.candidate).join('\n'))
@@ -168,11 +198,56 @@ export function ComparisonView({
         </div>
       )}
 
+      {/* Metadata from QR3 */}
+      {qr_metadata && (
+        <div className="rounded-lg border border-gray-200 bg-field/50 p-4">
+          <h3 className="mb-3 font-display text-base font-bold text-ink">Report Metadata</h3>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {/* Hashes */}
+            <div className="space-y-1.5">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                Report Hash
+              </p>
+              <p className="break-all font-mono text-xs text-ink">
+                {qr_metadata.report_hash}
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                Result Hash
+              </p>
+              <p className="break-all font-mono text-xs text-ink">
+                {qr_metadata.result_hash}
+              </p>
+            </div>
+            {/* Voter turnout */}
+            <div className="space-y-1.5">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                Voter Turnout
+              </p>
+              <p className="font-mono text-sm text-ink">
+                {qr_metadata.registered_voters.toLocaleString()} registered
+                <span className="mx-1.5 text-gray-400">|</span>
+                {qr_metadata.cast_ballots.toLocaleString()} cast
+                <span className="mx-1.5 text-gray-400">|</span>
+                {qr_metadata.voter_turnout_pct}%
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                VCM Type
+              </p>
+              <p className="font-mono text-sm text-ink">{qr_metadata.type}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Side-by-side tables */}
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
         {/* Scanned QR Data */}
         <div>
-          <h3 className="mb-4 font-serif text-lg font-bold text-[#1B3A5C]">
+          <h3 className="mb-4 font-display text-lg font-bold text-ink">
             Scanned QR Data
           </h3>
           {contestCodes.map(code => {
@@ -183,7 +258,7 @@ export function ComparisonView({
                   key={`qr-${code}`}
                   className="mb-6 rounded border border-dashed border-gray-300 p-4 text-center text-sm text-gray-400"
                 >
-                  No QR data for {code}
+                  No QR data for {contestLabel(code)}
                 </div>
               );
             }
@@ -204,7 +279,7 @@ export function ComparisonView({
 
         {/* Official DB Results */}
         <div>
-          <h3 className="mb-4 font-serif text-lg font-bold text-[#1B3A5C]">
+          <h3 className="mb-4 font-display text-lg font-bold text-ink">
             Official Results
           </h3>
           {contestCodes.map(code => {
@@ -215,7 +290,7 @@ export function ComparisonView({
                   key={`db-${code}`}
                   className="mb-6 rounded border border-dashed border-gray-300 p-4 text-center text-sm text-gray-400"
                 >
-                  No data in DB for {code}
+                  No data in DB for {contestLabel(code)}
                 </div>
               );
             }
@@ -258,7 +333,7 @@ export function ComparisonView({
         <button
           onClick={onUpload}
           disabled={uploading}
-          className="rounded-lg bg-[#1B3A5C] px-8 py-3 font-semibold text-[#F8F6F0] transition hover:bg-[#2a4d73] disabled:opacity-50"
+          className="rounded-lg bg-ink px-8 py-3 font-semibold text-ballot transition hover:brightness-125 disabled:opacity-50"
         >
           {uploading ? 'Uploading...' : 'Upload & Save'}
         </button>
