@@ -2,14 +2,13 @@
 
 import { useState, useCallback } from 'react';
 import { QRScanner } from './components/qr-scanner';
-import { ScanProgress } from './components/scan-progress';
+import { CategoryProgress } from './components/category-progress';
 import { ComparisonView } from './components/comparison-view';
 
 function getApiUrl(): string {
   return '/api';
 }
 const API_URL = getApiUrl();
-const TOTAL_QRS = 3;
 
 type Stage = 'idle' | 'scanning' | 'comparing' | 'done' | 'uploaded' | 'error';
 
@@ -26,27 +25,36 @@ interface ComparisonResult {
   discrepancy_details: any[];
 }
 
+/** Classify a raw QR text into a category. Returns null if unknown. */
+function classifyQr(raw: string): string | null {
+  if (raw.includes('00399000')) return 'NATIONAL';
+  if (raw.includes('01199000')) return 'PARTY LIST';
+  if (/^\d+,\d{8,},[0-9A-Fa-f]+,[0-9A-Fa-f]+,RV=/i.test(raw.trim())) return 'Metadata';
+  return null;
+}
+
 export default function ComparePage() {
   const [stage, setStage] = useState<Stage>('idle');
-  const [qrData, setQrData] = useState<string[]>([]);
-  const [currentSlot, setCurrentSlot] = useState(1);
+  const [qrData, setQrData] = useState<Map<string, string>>(new Map());
+  const [allScanned, setAllScanned] = useState(false);
   const [comparison, setComparison] = useState<ComparisonResult | null>(null);
   const [error, setError] = useState<string>('');
   const [pendingText, setPendingText] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
-  const triggerComparison = useCallback(async (scanned: string[]) => {
+  const triggerComparison = useCallback(async (captured: Map<string, string>) => {
     setStage('comparing');
     setError('');
     try {
+      const values = Array.from(captured.values());
       const res = await fetch(`${API_URL}/scan/compare`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           precinct_id: 'auto-detect',
-          qr_raw_1: scanned[0] || '',
-          qr_raw_2: scanned[1] || '',
-          qr_raw_3: scanned[2] || '',
+          qr_raw_1: values[0] || '',
+          qr_raw_2: values[1] || '',
+          qr_raw_3: values[2] || '',
         }),
       });
       if (!res.ok) throw new Error('Compare request failed');
@@ -66,31 +74,31 @@ export default function ComparePage() {
     [],
   );
 
-  /** User confirms the detected QR text — save it and advance */
   const handleConfirmAndNext = useCallback(() => {
     if (!pendingText) return;
 
-    const updated = [...qrData];
-    updated[currentSlot - 1] = pendingText;
-    setQrData(updated);
+    const cat = classifyQr(pendingText);
+    if (!cat) {
+      const updated = new Map(qrData);
+      updated.set(`Unknown-${Date.now()}`, pendingText);
+      setQrData(updated);
+    } else {
+      if (qrData.has(cat)) return;
+      const updated = new Map(qrData);
+      updated.set(cat, pendingText);
+      setQrData(updated);
+
+      if (['NATIONAL', 'PARTY LIST', 'Metadata'].every(c => updated.has(c) || qrData.has(c))) {
+        setAllScanned(true);
+      }
+    }
     setPendingText(null);
-    setCurrentSlot(s => s + 1);
-  }, [pendingText, qrData, currentSlot]);
+  }, [pendingText, qrData]);
 
   /** User wants to re-scan the current slot */
   const handleReject = useCallback(() => {
     setPendingText(null);
   }, []);
-
-  /** User wants to go back to the previous slot */
-  const handleBack = useCallback(() => {
-    if (currentSlot <= 1) return;
-    const updated = [...qrData];
-    updated[currentSlot - 2] = ''; // clear the previous slot
-    setQrData(updated);
-    setCurrentSlot(s => s - 1);
-    setPendingText(null);
-  }, [currentSlot, qrData]);
 
   /** Called via the "Compare Results" button */
   const handleDoneScanning = useCallback(() => {
@@ -101,14 +109,15 @@ export default function ComparePage() {
     if (!comparison) return;
     setIsUploading(true);
     try {
+      const values = Array.from(qrData.values());
       const res = await fetch(`${API_URL}/scan/upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           precinct_id: comparison.precinct_id,
-          qr_raw_1: qrData[0] || '',
-          qr_raw_2: qrData[1] || '',
-          qr_raw_3: qrData[2] || '',
+          qr_raw_1: values[0] || '',
+          qr_raw_2: values[1] || '',
+          qr_raw_3: values[2] || '',
           qr_parsed: comparison.qr_parsed,
           db_results: comparison.db_results,
           has_discrepancy: comparison.has_discrepancy,
@@ -128,8 +137,8 @@ export default function ComparePage() {
 
   const handleReset = useCallback(() => {
     setStage('idle');
-    setQrData([]);
-    setCurrentSlot(1);
+    setQrData(new Map());
+    setAllScanned(false);
     setComparison(null);
     setError('');
     setPendingText(null);
@@ -142,9 +151,13 @@ export default function ComparePage() {
   }, []);
 
   const isAiming = stage === 'scanning' && !pendingText;
-  const allScanned = currentSlot > TOTAL_QRS && qrData.some(Boolean);
-  // Show slots up to (currentSlot - 1) as visited (scanned or skipped)
-  const progressScanned = Math.max(qrData.filter(Boolean).length, currentSlot - 1);
+  const capturedCategories = new Set(
+    Array.from(qrData.keys()).filter(k => ['NATIONAL', 'PARTY LIST', 'Metadata'].includes(k))
+  );
+  const hasAnyQr = qrData.size > 0;
+  const isComplete = allScanned || (
+    ['NATIONAL', 'PARTY LIST', 'Metadata'].every(c => qrData.has(c))
+  );
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
@@ -167,12 +180,11 @@ export default function ComparePage() {
         </div>
       )}
 
-      {stage === 'scanning' && !allScanned && (
+      {stage === 'scanning' && (
         <div className="flex flex-col items-center gap-4 py-4">
-          <ScanProgress
-            scanned={progressScanned}
-            total={TOTAL_QRS}
-            currentScanning={currentSlot}
+          <CategoryProgress
+            captured={capturedCategories}
+            totalCount={qrData.size}
           />
 
           <QRScanner
@@ -182,54 +194,27 @@ export default function ComparePage() {
             detectedText={pendingText ?? undefined}
             onConfirm={handleConfirmAndNext}
             onReject={handleReject}
-            onBack={handleBack}
-            confirmLabel={
-              currentSlot >= TOTAL_QRS
-                ? 'Confirm — Done Scanning'
-                : `Confirm & Next (Slot ${currentSlot + 1})`
-            }
-            showBack={currentSlot > 1}
+            confirmLabel={isComplete ? 'Confirm — Done Scanning' : 'Confirm'}
+            showBack={false}
           />
 
-          {isAiming && (
-            <button
-              onClick={() => {
-                setCurrentSlot(s => s + 1);
-              }}
-              className="flex items-center justify-center rounded-lg border border-gray-400 px-6 py-3 text-sm text-gray-600 transition hover:bg-gray-100 min-w-[44px] min-h-[44px]"
-              type="button"
-            >
-              Skip this QR
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* All QR slots filled — show the "Compare" button */}
-      {stage === 'scanning' && allScanned && (
-        <div className="flex flex-col items-center gap-4 py-8">
-          <ScanProgress
-            scanned={progressScanned}
-            total={TOTAL_QRS}
-            currentScanning={currentSlot}
-          />
-          <p className="text-lg font-semibold text-green-700">
-            ✓ {qrData.filter(Boolean).length}/{TOTAL_QRS} QR codes captured
-          </p>
-          <div className="flex gap-3">
+          {hasAnyQr && (
             <button
               onClick={handleDoneScanning}
               className="rounded-lg bg-ink px-8 py-3 font-semibold text-ballot transition hover:brightness-125"
             >
               Compare Results
             </button>
+          )}
+
+          {isComplete && hasAnyQr && (
             <button
               onClick={handleReset}
-              className="rounded-lg border border-gray-400 px-6 py-3 text-sm text-gray-600 transition hover:bg-gray-100"
+              className="text-sm text-gray-500 underline hover:text-gray-700"
             >
               Start Over
             </button>
-          </div>
+          )}
         </div>
       )}
 
