@@ -19,6 +19,8 @@ export class ScanController {
 
   @Get('history')
   async history(@Query('limit') limit?: string) {
-    return this.scanService.getHistory(limit ? parseInt(limit, 10) : 50);
+    const parsed = limit ? parseInt(limit, 10) : 50;
+    const safeLimit = isNaN(parsed) || parsed < 1 ? 50 : parsed;
+    return this.scanService.getHistory(safeLimit);
   }
 }

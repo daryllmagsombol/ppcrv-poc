@@ -3,12 +3,32 @@ jest.setTimeout(120_000);
 import { Test, TestingModule } from '@nestjs/testing';
 import { ScanController } from '../scan.controller';
 import { ScanService } from '../scan.service';
+import { Pool } from 'pg';
+
+async function isDbReachable(): Promise<boolean> {
+  try {
+    const pool = new Pool({
+      host: process.env.PGHOST || 'localhost',
+      database: process.env.PGDATABASE || 'pprcv_local',
+      user: process.env.PGUSER || 'daryllmagsombol',
+      connectionTimeoutMillis: 3000,
+    });
+    await pool.query('SELECT 1');
+    await pool.end();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 describe('ScanController', () => {
   let controller: ScanController;
   let service: ScanService;
+  let dbAvailable = false;
 
   beforeAll(async () => {
+    dbAvailable = await isDbReachable();
+    if (!dbAvailable) return;
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ScanController],
       providers: [ScanService],
@@ -19,7 +39,12 @@ describe('ScanController', () => {
   });
 
   afterAll(async () => {
+    if (!dbAvailable || !service) return;
     await service.getPool().end();
+  });
+
+  beforeEach(() => {
+    if (!dbAvailable) pending('PostgreSQL not available — skipping integration tests');
   });
 
   it('should be defined', () => {

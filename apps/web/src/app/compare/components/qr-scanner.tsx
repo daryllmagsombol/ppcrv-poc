@@ -190,21 +190,20 @@ export function QRScanner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanning]);
 
-  // Sync pendingTextRef AND stamp lastConfirmedRef in the SAME effect
+  // Sync pendingTextRef in an effect (reactive to prop changes)
   const prevDetectedRef = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const wasDetected = prevDetectedRef.current !== undefined;
-    const nowDetected = detectedText !== undefined;
-    const prevText = prevDetectedRef.current;
     prevDetectedRef.current = detectedText;
-
     pendingTextRef.current = detectedText;
-
-    // User confirmed: text went from present → cleared
-    if (wasDetected && !nowDetected && prevText) {
-      lastConfirmedRef.current = prevText;
-    }
   }, [detectedText]);
+
+  /** Wrapper: only set lastConfirmedRef on explicit user confirmation. */
+  const handleConfirm = useCallback(() => {
+    if (pendingTextRef.current) {
+      lastConfirmedRef.current = pendingTextRef.current;
+    }
+    onConfirm?.();
+  }, [onConfirm]);
 
   return (
     <div className="flex flex-col items-center gap-4">
@@ -252,7 +251,7 @@ export function QRScanner({
                 </button>
               )}
               <button
-                onClick={onConfirm}
+                onClick={handleConfirm}
                 className="rounded-lg bg-green-700 px-5 py-2 text-sm font-semibold text-white transition hover:bg-green-800 min-w-[44px] min-h-[44px]"
                 type="button"
               >

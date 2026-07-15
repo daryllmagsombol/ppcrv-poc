@@ -189,28 +189,18 @@ export class ScanService implements OnModuleInit {
   private parseMetadataQr(raw: string): VcmMetadata | null {
     const text = raw.trim();
 
-    // Format: at least 5 comma-separated parts
+    // Format: [type, precinct_id, report_hash, result_hash, RV=x|CB=x|RB=x|VT=x]
     const parts = text.split(',');
     if (parts.length < 5) return null;
 
-    const type = parts[0].trim();
     const precinctId = parts[1].trim();
-    const reportHash = parts.slice(2, -1).join(','); // everything after precinct, before last stats block
-    const statsPart = parts[parts.length - 1].trim(); // RV=x|CB=x|RB=x|VT=x
-
-    // The report_hash and result_hash are the 3rd and 4th fields
-    // Re-slice correctly: [type, precinct, report_hash, result_hash, stats]
-    const parts2 = text.split(',');
-    if (parts2.length < 5) return null;
-
-    const precinctId2 = parts2[1].trim();
-    const reportHash2 = parts2[2]?.trim() || '';
-    const resultHash2 = parts2[3]?.trim() || '';
-    const statsStr = parts2.slice(4).join(',').trim();
-    const type2 = parts2[0].trim();
+    const reportHash = parts[2]?.trim() || '';
+    const resultHash = parts[3]?.trim() || '';
+    const statsStr = parts.slice(4).join(',').trim();
+    const type = parts[0].trim();
 
     // Validate: precinct must look like a precinct ID (8+ digits)
-    if (!/^\d{8,}$/.test(precinctId2)) return null;
+    if (!/^\d{8,}$/.test(precinctId)) return null;
 
     // Parse stats: RV=x|CB=x|RB=x|VT=x
     const stats: Record<string, number> = { RV: 0, CB: 0, RB: 0, VT: 0 };
@@ -226,10 +216,10 @@ export class ScanService implements OnModuleInit {
     }
 
     return {
-      type: type2,
-      precinct_id: precinctId2,
-      report_hash: reportHash2,
-      result_hash: resultHash2,
+      type,
+      precinct_id: precinctId,
+      report_hash: reportHash,
+      result_hash: resultHash,
       registered_voters: stats.RV,
       cast_ballots: stats.CB,
       remaining_ballots: stats.RB,
