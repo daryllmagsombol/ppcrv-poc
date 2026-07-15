@@ -6,13 +6,8 @@ import { ScanProgress } from './components/scan-progress';
 import { ComparisonView } from './components/comparison-view';
 
 function getApiUrl(): string {
-  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
-  if (typeof window !== 'undefined') {
-    const proto = window.location.protocol === 'https:' ? 'https' : 'http';
-    const port = window.location.port === '3000' ? '3001' : '3001';
-    return `${proto}://${window.location.hostname}:${port}/api`;
-  }
-  return 'http://localhost:3001/api';
+  // Use relative URL — Next.js rewrites /api to the backend
+  return '/api';
 }
 const API_URL = getApiUrl();
 const TOTAL_QRS = 3;

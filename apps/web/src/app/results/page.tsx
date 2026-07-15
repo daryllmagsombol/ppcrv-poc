@@ -6,12 +6,7 @@ import { ResultsTable } from './components/results-table';
 import { BreadcrumbNav } from './components/breadcrumb-nav';
 
 function getApiUrl(): string {
-  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
-  if (typeof window !== 'undefined') {
-    const proto = window.location.protocol === 'https:' ? 'https' : 'http';
-    return `${proto}://${window.location.hostname}:3001/api`;
-  }
-  return 'http://localhost:3001/api';
+  return '/api';
 }
 const API = getApiUrl();
 
