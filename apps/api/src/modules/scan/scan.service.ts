@@ -53,8 +53,32 @@ export class ScanService implements OnModuleInit {
     const dbResults = await this.queryPrecinctResults(dto.precinct_id);
     const discrepancies = this.findDiscrepancies(qrParsed, dbResults);
 
+    // Look up geography for the response
+    let region, province, municipality, barangay, pollplace;
+    try {
+      const geo = await this.pool.query(
+        `SELECT reg_name, prv_name, mun_name, brgy_name, pollplace
+         FROM ref_precincts WHERE acm_id = $1`,
+        [dto.precinct_id],
+      );
+      if (geo.rows.length > 0) {
+        region = geo.rows[0].reg_name;
+        province = geo.rows[0].prv_name;
+        municipality = geo.rows[0].mun_name;
+        barangay = geo.rows[0].brgy_name;
+        pollplace = geo.rows[0].pollplace;
+      }
+    } catch {
+      // Geography lookup is best-effort
+    }
+
     return {
       precinct_id: dto.precinct_id,
+      region,
+      province,
+      municipality,
+      barangay,
+      pollplace,
       qr_parsed: qrParsed,
       db_results: dbResults,
       has_discrepancy: discrepancies.length > 0,
@@ -127,12 +151,31 @@ export class ScanService implements OnModuleInit {
 
   private async queryPrecinctResults(precinctId: string): Promise<ContestResult[]> {
     try {
+      // 1. Look up precinct geography from PostgreSQL ref_precincts
+      const geoResult = await this.pool.query(
+        `SELECT reg_name, prv_name, mun_name, brgy_name, pollplace
+         FROM ref_precincts WHERE acm_id = $1`,
+        [precinctId],
+      );
+
+      if (geoResult.rows.length === 0) {
+        console.warn(`Precinct ${precinctId} not found in ref_precincts`);
+        return [];
+      }
+
+      const { reg_name, prv_name, mun_name, brgy_name, pollplace } = geoResult.rows[0];
+
+      // 2. Query DuckDB parquet using the geographic hierarchy
       const glob = `${this.parquetBase}/precinct/**/*.parquet`;
-      // Try matching by pollplace containing precinct ID, then fall back to any match
+      const esc = (val: string) => val.replace(/'/g, "''");
       const sql = `
         SELECT contest_code, candidate_name, party_code, SUM(total_votes) as votes
         FROM '${glob}'
-        WHERE pollplace LIKE '%${precinctId.replace(/'/g, "''")}%'
+        WHERE reg_name = '${esc(reg_name)}'
+          AND prv_name = '${esc(prv_name)}'
+          AND mun_name = '${esc(mun_name)}'
+          AND brgy_name = '${esc(brgy_name)}'
+          AND pollplace = '${esc(pollplace)}'
         GROUP BY contest_code, candidate_name, party_code
         ORDER BY contest_code, votes DESC
       `.trim().replace(/\s+/g, ' ');

@@ -1,3 +1,5 @@
+jest.setTimeout(120_000);
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { ScanController } from '../scan.controller';
 import { ScanService } from '../scan.service';

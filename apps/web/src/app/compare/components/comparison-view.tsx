@@ -23,6 +23,11 @@ interface Discrepancy {
 
 interface ComparisonViewProps {
   precinct_id: string;
+  region?: string;
+  province?: string;
+  municipality?: string;
+  barangay?: string;
+  pollplace?: string;
   qr_parsed: ContestResult[];
   db_results: ContestResult[];
   has_discrepancy: boolean;
@@ -100,6 +105,11 @@ function ContestTable({
 
 export function ComparisonView({
   precinct_id,
+  region,
+  province,
+  municipality,
+  barangay,
+  pollplace,
   qr_parsed,
   db_results,
   has_discrepancy,
@@ -119,11 +129,17 @@ export function ComparisonView({
     <div className="space-y-6">
       {/* Header */}
       <div className="rounded-lg border border-gray-200 bg-[#F8F6F0] p-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between">
           <div>
             <h2 className="font-serif text-xl font-bold text-[#1B3A5C]">
               Precinct: {precinct_id}
             </h2>
+            {region && (
+              <p className="mt-1 text-sm text-gray-600">
+                {[barangay, municipality, province, region].filter(Boolean).join(' › ')}
+                {pollplace && <span className="ml-2 text-gray-400">| {pollplace}</span>}
+              </p>
+            )}
           </div>
           {has_discrepancy ? (
             <span className="rounded-full bg-red-100 px-3 py-1 text-sm font-semibold text-red-700">

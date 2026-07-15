@@ -12,6 +12,11 @@ type Stage = 'idle' | 'scanning' | 'comparing' | 'uploading' | 'done' | 'uploade
 
 interface ComparisonResult {
   precinct_id: string;
+  region?: string;
+  province?: string;
+  municipality?: string;
+  barangay?: string;
+  pollplace?: string;
   qr_parsed: any[];
   db_results: any[];
   has_discrepancy: boolean;
@@ -177,6 +182,11 @@ export default function ComparePage() {
           {stage === 'done' && (
             <ComparisonView
               precinct_id={comparison.precinct_id}
+              region={comparison.region}
+              province={comparison.province}
+              municipality={comparison.municipality}
+              barangay={comparison.barangay}
+              pollplace={comparison.pollplace}
               qr_parsed={comparison.qr_parsed}
               db_results={comparison.db_results}
               has_discrepancy={comparison.has_discrepancy}

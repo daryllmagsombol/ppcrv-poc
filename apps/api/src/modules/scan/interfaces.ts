@@ -21,6 +21,11 @@ export interface Discrepancy {
 
 export interface ComparisonResult {
   precinct_id: string;
+  region?: string;
+  province?: string;
+  municipality?: string;
+  barangay?: string;
+  pollplace?: string;
   qr_parsed: ContestResult[];
   db_results: ContestResult[];
   has_discrepancy: boolean;
