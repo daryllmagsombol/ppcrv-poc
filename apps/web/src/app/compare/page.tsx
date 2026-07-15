@@ -150,7 +150,6 @@ export default function ComparePage() {
     setStage('error');
   }, []);
 
-  const isAiming = stage === 'scanning' && !pendingText;
   const capturedCategories = new Set(
     Array.from(qrData.keys()).filter(k => ['NATIONAL', 'PARTY LIST', 'Metadata'].includes(k))
   );
