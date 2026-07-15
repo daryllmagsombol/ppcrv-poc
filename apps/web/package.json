@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --hostname 0.0.0.0",
+    "dev": "next dev --hostname 0.0.0.0 --experimental-https --experimental-https-key /tmp/localhost-key.pem --experimental-https-cert /tmp/localhost-cert.pem",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0",
     "lint": "echo \"No lint yet (next lint deprecated in 15.5, removed in 16)\"",

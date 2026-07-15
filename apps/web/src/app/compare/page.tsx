@@ -7,7 +7,11 @@ import { ComparisonView } from './components/comparison-view';
 
 function getApiUrl(): string {
   if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
-  if (typeof window !== 'undefined') return `http://${window.location.hostname}:3001/api`;
+  if (typeof window !== 'undefined') {
+    const proto = window.location.protocol === 'https:' ? 'https' : 'http';
+    const port = window.location.port === '3000' ? '3001' : '3001';
+    return `${proto}://${window.location.hostname}:${port}/api`;
+  }
   return 'http://localhost:3001/api';
 }
 const API_URL = getApiUrl();
