@@ -1,10 +1,3 @@
-.commandcode/
-.pytest_cache/
-output/
-__pycache__/
-sample-csv/results.csv
-output.txt
-
 # Node / Turborepo
 node_modules/
 .next/
@@ -12,12 +5,16 @@ dist/
 .turbo/
 *.tsbuildinfo
 
+# ETL
+.pytest_cache/
+output/
+__pycache__/
+apps/etl/.env
+sample-csv/results.csv
+output.txt
+
 # IDE
+.commandcode/
 .DS_Store
 *.swp
-*.swo
-
-# Environment
-.env
-.env.local
-.env.*.local
+*.s

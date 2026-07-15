@@ -23,7 +23,21 @@ jobs:
 
   api-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: pprcv_local
+          POSTGRES_USER: runner
+          POSTGRES_HOST_AUTH_METHOD: trust
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -32,7 +46,12 @@ jobs:
           node-version: 24
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - name: Run tests
+        env:
+          PGHOST: postgres
+          PGDATABASE: pprcv_local
+          PGUSER: runner
+        run: pnpm test
 
   etl-test:
     runs-on: ubuntu-latest

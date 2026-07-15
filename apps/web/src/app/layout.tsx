@@ -13,7 +13,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en-PH">
       <body className="bg-ballot text-ink font-body antialiased">
         {children}
       </body>

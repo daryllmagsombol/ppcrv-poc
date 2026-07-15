@@ -6,10 +6,12 @@
 |---|---|---|
 | Node.js | ≥22 | `node --version` |
 | pnpm | ≥9 | `pnpm --version` |
-| Python | ≥3.9 | `python3 --version` |
+| Python | ≥3.9 | `python3 --version` (macOS/Linux) or `python --version` (Windows) |
 | pip | — | `pip --version` |
 | DuckDB CLI | ≥1.0 | `duckdb --version` |
 | PostgreSQL | ≥16 | `psql --version` |
+
+> **Platform note:** On Windows, use `python` instead of `python3` in all commands below. On macOS/Linux, use `python3`.
 
 **Install DuckDB CLI:**
 
@@ -18,6 +20,8 @@
 brew install duckdb
 
 # Linux — download from https://duckdb.org/docs/installation/
+
+# Windows — download from https://duckdb.org/docs/installation/ and add to PATH
 ```
 
 **Google Drive:** Download `results.csv` (2 GB) and place it at `sample-csv/results.csv`. The file is gitignored — you need to obtain it separately.
@@ -87,17 +91,24 @@ pnpm install
 pip install duckdb pytest pyarrow psycopg2-binary python-dotenv
 
 # 2. Configure Postgres connection
-cp apps/etl/.env.example apps/etl/.env
+cp apps/etl/.env.example apps/etl/.env          # macOS/Linux
+# copy apps\etl\.env.example apps\etl\.env       # Windows
 # Edit apps/etl/.env — set PGUSER to your system username
 
 # 3. Scaffold reference database
-python apps/etl/scripts/load_ref_data.py
+python3 apps/etl/scripts/load_ref_data.py
 
-# 4. Run ETL to generate Parquet output
-python apps/etl/scripts/run_aggregation.py \
+# 4. Run ETL to generate Parquet output (full CSV, ~1m 40s)
+python3 apps/etl/scripts/run_aggregation.py \
   sample-csv/results.csv \
   sample-csv/precincts.csv \
-  apps/etl/output --sample 100000
+  apps/etl/output
+
+# For dev iteration (100k rows, ~5s), add --sample 100000:
+# python3 apps/etl/scripts/run_aggregation.py \
+#   sample-csv/results.csv \
+#   sample-csv/precincts.csv \
+#   apps/etl/output --sample 100000
 
 # 5. Start API + Frontend
 pnpm dev
@@ -118,8 +129,11 @@ Sets up a local Postgres database with reference data (parties, contests, precin
 brew install postgresql@16
 brew services start postgresql@16
 
+# Windows — download from https://www.postgresql.org/download/windows/ and add bin/ to PATH
+
 # Verify
-psql -U $(whoami) -d postgres -c "SELECT 1"
+psql -U $(whoami) -d postgres -c "SELECT 1"       # macOS/Linux
+# psql -U %USERNAME% -d postgres -c "SELECT 1"    # Windows (cmd)
 ```
 
 ### Create database
@@ -131,7 +145,8 @@ createdb pprcv_local
 ### Configure connection
 
 ```bash
-cp apps/etl/.env.example apps/etl/.env
+cp apps/etl/.env.example apps/etl/.env            # macOS/Linux
+# copy apps\etl\.env.example apps\etl\.env         # Windows
 ```
 
 Default `.env`:
@@ -147,7 +162,7 @@ Change `PGUSER` to match your system username (`whoami`). On macOS, your system 
 ### Load reference data
 
 ```bash
-python apps/etl/scripts/load_ref_data.py
+python3 apps/etl/scripts/load_ref_data.py
 ```
 
 Expected output:
@@ -164,7 +179,7 @@ Loaded rows:
 Re-run with `--fresh` to drop and reload:
 
 ```bash
-python apps/etl/scripts/load_ref_data.py --fresh
+python3 apps/etl/scripts/load_ref_data.py --fresh
 ```
 
 ---
@@ -184,7 +199,7 @@ pip install duckdb pytest pyarrow psycopg2-binary python-dotenv
 Full run (~1m 40s for 24M rows):
 
 ```bash
-python apps/etl/scripts/run_aggregation.py \
+python3 apps/etl/scripts/run_aggregation.py \
   sample-csv/results.csv \
   sample-csv/precincts.csv \
   apps/etl/output
@@ -193,10 +208,19 @@ python apps/etl/scripts/run_aggregation.py \
 Dev iteration (100k rows, ~5s):
 
 ```bash
-python apps/etl/scripts/run_aggregation.py \
+python3 apps/etl/scripts/run_aggregation.py \
   sample-csv/results.csv \
   sample-csv/precincts.csv \
   apps/etl/output --sample 100000
+```
+
+Use `--refresh` to wipe the output directory first (clean slate after code changes):
+
+```bash
+python3 apps/etl/scripts/run_aggregation.py \
+  sample-csv/results.csv \
+  sample-csv/precincts.csv \
+  apps/etl/output --refresh
 ```
 
 ### Verify
@@ -313,7 +337,7 @@ This uses Turborepo to run `dev` in both `apps/api` and `apps/web` concurrently.
 |---|---|---|---|
 | Frontend | `apps/web/` | 3000 | `pnpm dev` (from root) |
 | Backend | `apps/api/` | 3001 | `pnpm dev` (from root) |
-| ETL | `apps/etl/` | — | `python apps/etl/scripts/run_aggregation.py ...` |
+| ETL | `apps/etl/` | — | `python3 apps/etl/scripts/run_aggregation.py ...` |
 | DB | Postgres local | 5432 | `brew services start postgresql@16` |
 
 ---
@@ -322,12 +346,15 @@ This uses Turborepo to run `dev` in both `apps/api` and `apps/web` concurrently.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `duckdb: command not found` | DuckDB CLI not installed | `brew install duckdb` |
+| `duckdb: command not found` | DuckDB CLI not installed | `brew install duckdb` (macOS) or download from duckdb.org (Windows) |
 | `No files found matching the pattern` | Parquet files missing or wrong path | Run ETL or set `PARQUET_BASE_PATH` |
-| `could not connect to server: Connection refused` | Postgres not running | `brew services start postgresql@16` |
+| `could not connect to server: Connection refused` | Postgres not running | `brew services start postgresql@16` (macOS) or start PostgreSQL service via Windows Services panel |
 | `FATAL: role "X" does not exist` | Postgres user mismatch | `createuser -s $(whoami)` or set `PGUSER` in `apps/etl/.env` |
 | `database "pprcv_local" does not exist` | Database not created | `createdb pprcv_local` |
 | Frontend shows blank page / 404 | API not running | Wait for `pnpm dev` to finish starting both services |
 | `Module not found: Can't resolve` | Node deps not installed | `pnpm install` |
 | API returns stale results | DuckDB querying old Parquet | Re-run ETL aggregation |
+| `python: command not found` | macOS has no `python` alias by default | Use `python3` instead of `python` |
+| `'cp' is not recognized` | Windows uses `copy` instead of `cp` | Use `copy apps\etl\.env.example apps\etl\.env` |
+| `'createdb' is not recognized` | PostgreSQL `bin/` not in PATH | Add `C:\Program Files\PostgreSQL\16\bin` to your system PATH |
 | `psycopg2` import error | Python deps missing | `pip install psycopg2-binary python-dotenv` |
