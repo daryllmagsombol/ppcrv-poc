@@ -9,16 +9,16 @@ export class ScanController {
 
   @Post('compare')
   async compare(@Body() dto: ScanCompareDto) {
-    return { message: 'not implemented yet' };
+    return this.scanService.compare(dto);
   }
 
   @Post('upload')
   async upload(@Body() dto: ScanUploadDto) {
-    return { message: 'not implemented yet' };
+    return this.scanService.upload(dto);
   }
 
   @Get('history')
   async history(@Query('limit') limit?: string) {
-    return { message: 'not implemented yet' };
+    return this.scanService.getHistory(limit ? parseInt(limit, 10) : 50);
   }
 }

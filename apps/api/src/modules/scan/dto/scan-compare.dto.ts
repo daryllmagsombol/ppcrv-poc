@@ -2,7 +2,7 @@ import { IsString, IsOptional } from 'class-validator';
 
 export class ScanCompareDto {
   @IsString()
-  precinct_id: string;
+  precinct_id!: string;
 
   @IsOptional()
   @IsString()

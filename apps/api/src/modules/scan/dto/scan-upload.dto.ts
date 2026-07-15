@@ -2,7 +2,7 @@ import { IsString, IsBoolean, IsOptional } from 'class-validator';
 
 export class ScanUploadDto {
   @IsString()
-  precinct_id: string;
+  precinct_id!: string;
 
   @IsOptional()
   @IsString()
