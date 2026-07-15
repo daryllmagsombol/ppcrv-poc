@@ -421,15 +421,40 @@ export class ScanService implements OnModuleInit {
 
   private findDiscrepancies(qr: ContestResult[], db: ContestResult[]): Discrepancy[] {
     const discrepancies: Discrepancy[] = [];
+
+    // Check QR → DB: flag QR candidates missing or mismatched in DB
     for (const qrContest of qr) {
       const dbContest = db.find(c => c.contest_code === qrContest.contest_code);
-      if (!dbContest) continue;
+      if (!dbContest) {
+        // QR contest not found in DB at all → flag every candidate
+        for (const qrCandidate of qrContest.candidates) {
+          if (qrCandidate.candidate === 'Unparsed QR Data') continue;
+          discrepancies.push({
+            contest_code: qrContest.contest_code,
+            contest_name: qrContest.contest_name,
+            candidate: qrCandidate.candidate,
+            qr_votes: qrCandidate.votes,
+            db_votes: 0,
+          });
+        }
+        continue;
+      }
+
       for (const qrCandidate of qrContest.candidates) {
         if (qrCandidate.candidate === 'Unparsed QR Data') continue;
         const dbCandidate = dbContest.candidates.find(
           c => c.candidate === qrCandidate.candidate,
         );
-        if (dbCandidate && dbCandidate.votes !== qrCandidate.votes) {
+        if (!dbCandidate) {
+          // QR candidate missing from DB → flag with db_votes: 0
+          discrepancies.push({
+            contest_code: qrContest.contest_code,
+            contest_name: qrContest.contest_name,
+            candidate: qrCandidate.candidate,
+            qr_votes: qrCandidate.votes,
+            db_votes: 0,
+          });
+        } else if (dbCandidate.votes !== qrCandidate.votes) {
           discrepancies.push({
             contest_code: qrContest.contest_code,
             contest_name: qrContest.contest_name,
@@ -440,6 +465,42 @@ export class ScanService implements OnModuleInit {
         }
       }
     }
+
+    // Check DB → QR: flag DB candidates not found in QR
+    for (const dbContest of db) {
+      const qrContest = qr.find(c => c.contest_code === dbContest.contest_code);
+      if (!qrContest) {
+        // DB contest not found in QR → flag every candidate
+        for (const dbCandidate of dbContest.candidates) {
+          discrepancies.push({
+            contest_code: dbContest.contest_code,
+            contest_name: dbContest.contest_name,
+            candidate: dbCandidate.candidate,
+            qr_votes: 0,
+            db_votes: dbCandidate.votes,
+          });
+        }
+        continue;
+      }
+
+      for (const dbCandidate of dbContest.candidates) {
+        if (dbCandidate.candidate === 'Unparsed QR Data') continue;
+        const qrCandidate = qrContest.candidates.find(
+          c => c.candidate === dbCandidate.candidate,
+        );
+        if (!qrCandidate) {
+          // DB candidate missing from QR → flag with qr_votes: 0
+          discrepancies.push({
+            contest_code: dbContest.contest_code,
+            contest_name: dbContest.contest_name,
+            candidate: dbCandidate.candidate,
+            qr_votes: 0,
+            db_votes: dbCandidate.votes,
+          });
+        }
+      }
+    }
+
     return discrepancies;
   }
 }

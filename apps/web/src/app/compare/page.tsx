@@ -25,11 +25,37 @@ interface ComparisonResult {
   discrepancy_details: any[];
 }
 
-/** Classify a raw QR text into a category. Returns null if unknown. */
+/**
+ * Extract the category label from a VCM QR text.
+ *
+ * Format A (multi-line):  "NATIONAL\ncontest_code:pos=votes|..."
+ * Format B (single-line): "NATIONAL contest_code:pos=votes|..."
+ *
+ * Returns the category string ("NATIONAL", "PARTY LIST") or null if unknown.
+ */
 function classifyQr(raw: string): string | null {
-  if (raw.includes('00399000')) return 'NATIONAL';
-  if (raw.includes('01199000')) return 'PARTY LIST';
-  if (/^\d+,\d{8,},[0-9A-Fa-f]+,[0-9A-Fa-f]+,RV=/i.test(raw.trim())) return 'Metadata';
+  const text = raw.trim();
+
+  // Metadata QR — comma-separated with stats block
+  if (/^\d+,\d{8,},[0-9A-Fa-f]+,[0-9A-Fa-f]+,RV=/i.test(text)) return 'Metadata';
+
+  // Extract category from VCM format
+  const lines = text.split('\n');
+  let category = '';
+  if (lines.length >= 2) {
+    // Format A: category on line 1
+    category = lines[0].trim();
+  } else {
+    // Format B: category before "contest_code:" pattern
+    const colonMatch = text.match(/\s(\d+:[0-9|=|]+)$/);
+    if (colonMatch) {
+      const colonIndex = text.lastIndexOf(colonMatch[0]);
+      category = text.slice(0, colonIndex).trim();
+    }
+  }
+
+  if (category === 'NATIONAL') return 'NATIONAL';
+  if (category === 'PARTY LIST') return 'PARTY LIST';
   return null;
 }
 
