@@ -63,8 +63,9 @@ describe('ScanService', () => {
     });
 
     it('should handle unparsable QR data gracefully', async () => {
+      // Use unknown precinct so DB returns nothing, avoiding discrepancy
       const result = await service.compare({
-        precinct_id: '01010001',
+        precinct_id: 'ZZZZZZZZ',
         qr_raw_1: 'not-valid-data',
       });
 
@@ -96,9 +97,6 @@ describe('ScanService', () => {
     });
 
     it('should detect discrepancies when votes differ', async () => {
-      // VCM format uses position numbers, not candidate names
-      // Discrepancy detection requires a position-to-candidate mapping
-      // For now, just verify parsing works
       const result = await service.compare({
         precinct_id: '01010001',
         qr_raw_1: 'NATIONAL\n00399000:1=999|2=0|3=0',
@@ -106,8 +104,8 @@ describe('ScanService', () => {
 
       expect(result.qr_parsed.length).toBeGreaterThan(0);
       expect(result.qr_parsed[0].contest_code).toBe('00399000');
-      // VCM positions show as "Position N" — no candidate name matching yet
-      expect(result.qr_parsed[0].candidates[0].candidate).toBe('Position 1');
+      // Position 1 is resolved to the actual candidate name via ref_candidates
+      expect(result.qr_parsed[0].candidates[0].candidate).not.toBe('Position 1');
       expect(result.qr_parsed[0].candidates[0].votes).toBe(999);
     });
   });

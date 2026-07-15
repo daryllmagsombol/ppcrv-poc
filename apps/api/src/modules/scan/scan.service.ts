@@ -298,7 +298,7 @@ export class ScanService implements OnModuleInit {
       // Metadata QR is typically the last one and has comma-separated values
       for (const line of lines) {
         const parts = line.split(',');
-        if (parts.length >= 2 && /^\d{8}$/.test(parts[1].trim())) {
+        if (parts.length >= 2 && /^\d{8,}$/.test(parts[1].trim())) {
           return parts[1].trim();
         }
       }
@@ -475,6 +475,8 @@ export class ScanService implements OnModuleInit {
 
     // Check QR → DB: flag QR candidates missing or mismatched in DB
     for (const qrContest of qr) {
+      // Skip RAW entries — they're unparsed text, not structured vote data
+      if (qrContest.contest_code === 'RAW') continue;
       const dbContest = db.find(c => c.contest_code === qrContest.contest_code);
       if (!dbContest) {
         // QR contest not found in DB at all → flag every candidate
@@ -516,11 +518,14 @@ export class ScanService implements OnModuleInit {
     }
 
     // Check DB → QR: flag DB candidates not found in QR
+    // Skip zero-vote DB candidates — VCM receipts omit them, so they are
+    // expected to be absent from the QR data.
     for (const dbContest of db) {
       const qrContest = qr.find(c => c.contest_code === dbContest.contest_code);
       if (!qrContest) {
-        // DB contest not found in QR → flag every candidate
+        // DB contest not found in QR → flag only non-zero candidates
         for (const dbCandidate of dbContest.candidates) {
+          if (dbCandidate.votes === 0) continue;
           discrepancies.push({
             contest_code: dbContest.contest_code,
             contest_name: dbContest.contest_name,
@@ -535,6 +540,7 @@ export class ScanService implements OnModuleInit {
       for (let idx = 0; idx < dbContest.candidates.length; idx++) {
         const dbCandidate = dbContest.candidates[idx];
         if (dbCandidate.candidate === 'Unparsed QR Data') continue;
+        if (dbCandidate.votes === 0) continue;
         const qrCandidate = matchQrCandidate(qrContest.candidates, dbCandidate, idx);
         if (!qrCandidate) {
           // DB candidate missing from QR → flag with qr_votes: 0
