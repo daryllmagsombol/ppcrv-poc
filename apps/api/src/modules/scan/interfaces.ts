@@ -2,6 +2,8 @@ export interface CandidateVote {
   candidate: string;
   party: string;
   votes: number;
+  /** Ballot position (1-based) from the VCM receipt, if available */
+  position?: number;
 }
 
 export interface ContestResult {

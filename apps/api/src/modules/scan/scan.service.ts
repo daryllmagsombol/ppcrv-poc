@@ -269,10 +269,12 @@ export class ScanService implements OnModuleInit {
     const candidates = pairs
       .map(pair => {
         const [pos, votes] = pair.split('=');
+        const positionNum = parseInt(pos, 10);
         return {
           candidate: `Position ${pos}`,
           party: '',
           votes: Number(votes) || 0,
+          position: isNaN(positionNum) ? undefined : positionNum,
         };
       })
       .filter(c => c.votes > 0);
@@ -321,21 +323,22 @@ export class ScanService implements OnModuleInit {
       const { reg_name, prv_name, mun_name, brgy_name, pollplace } = geoResult.rows[0];
 
       // 2. Query DuckDB parquet using the geographic hierarchy
+      // Pipe SQL via stdin instead of -c to avoid shell-interpolation vectors
       const glob = `${this.parquetBase}/precinct/**/*.parquet`;
-      const esc = (val: string) => val.replace(/'/g, "''");
-      const sql = `
-        SELECT contest_code, candidate_name, party_code, SUM(total_votes) as votes
-        FROM '${glob}'
-        WHERE reg_name = '${esc(reg_name)}'
-          AND prv_name = '${esc(prv_name)}'
-          AND mun_name = '${esc(mun_name)}'
-          AND brgy_name = '${esc(brgy_name)}'
-          AND pollplace = '${esc(pollplace)}'
-        GROUP BY contest_code, candidate_name, party_code
-        ORDER BY contest_code, candidate_name
-      `.trim().replace(/\s+/g, ' ');
+      const sql = [
+        `SELECT contest_code, candidate_name, party_code, SUM(total_votes) as votes`,
+        `FROM read_parquet('${glob}')`,
+        `WHERE reg_name = '${reg_name.replace(/'/g, "''")}'`,
+        `  AND prv_name = '${prv_name.replace(/'/g, "''")}'`,
+        `  AND mun_name = '${mun_name.replace(/'/g, "''")}'`,
+        `  AND brgy_name = '${brgy_name.replace(/'/g, "''")}'`,
+        `  AND pollplace = '${pollplace.replace(/'/g, "''")}'`,
+        `GROUP BY contest_code, candidate_name, party_code`,
+        `ORDER BY contest_code, candidate_name`,
+      ].join('\n');
 
-      const output = execFileSync('duckdb', ['-json', '-c', sql], {
+      const output = execFileSync('duckdb', ['-json'], {
+        input: sql,
         encoding: 'utf-8',
         maxBuffer: 50 * 1024 * 1024,
       });
@@ -406,11 +409,12 @@ export class ScanService implements OnModuleInit {
 
         if (result.rows.length === 0) continue;
 
-        // Replace "Position X" with the name at index (X-1)
+        // Replace "Position X" with the name at index (X-1), preserve position
         for (const c of contest.candidates) {
           const pos = parseInt(c.candidate.replace('Position ', ''), 10);
           if (!isNaN(pos) && pos >= 1 && pos <= result.rows.length) {
             c.candidate = result.rows[pos - 1].candidate_name;
+            c.position = pos; // preserve for position-based fallback matching
           }
         }
       } catch {
@@ -421,6 +425,53 @@ export class ScanService implements OnModuleInit {
 
   private findDiscrepancies(qr: ContestResult[], db: ContestResult[]): Discrepancy[] {
     const discrepancies: Discrepancy[] = [];
+
+    /**
+     * Find a DB candidate matching a QR candidate. Tries name match first,
+     * then falls back to position-based matching when the QR candidate has
+     * a stored position number.
+     */
+    const matchDbCandidate = (
+      dbList: CandidateVote[],
+      qrCandidate: CandidateVote,
+    ): CandidateVote | undefined => {
+      // 1. Exact name match
+      const byName = dbList.find(c => c.candidate === qrCandidate.candidate);
+      if (byName) return byName;
+
+      // 2. Position-based fallback (QR position X → DB index X-1)
+      if (qrCandidate.position !== undefined) {
+        const idx = qrCandidate.position - 1;
+        const byPosition = dbList[idx];
+        if (byPosition && byPosition.votes === qrCandidate.votes) {
+          // Same position + same vote count → same candidate, different name
+          return byPosition;
+        }
+      }
+
+      return undefined;
+    };
+
+    /**
+     * Find a QR candidate matching a DB candidate. Same strategy.
+     */
+    const matchQrCandidate = (
+      qrList: CandidateVote[],
+      dbCandidate: CandidateVote,
+      index: number, // position in the DB list (used for fallback)
+    ): CandidateVote | undefined => {
+      // 1. Exact name match
+      const byName = qrList.find(c => c.candidate === dbCandidate.candidate);
+      if (byName) return byName;
+
+      // 2. Position-based fallback (DB index X → QR position X+1)
+      const byPosition = qrList.find(c => c.position === index + 1);
+      if (byPosition && byPosition.votes === dbCandidate.votes) {
+        return byPosition;
+      }
+
+      return undefined;
+    };
 
     // Check QR → DB: flag QR candidates missing or mismatched in DB
     for (const qrContest of qr) {
@@ -442,9 +493,7 @@ export class ScanService implements OnModuleInit {
 
       for (const qrCandidate of qrContest.candidates) {
         if (qrCandidate.candidate === 'Unparsed QR Data') continue;
-        const dbCandidate = dbContest.candidates.find(
-          c => c.candidate === qrCandidate.candidate,
-        );
+        const dbCandidate = matchDbCandidate(dbContest.candidates, qrCandidate);
         if (!dbCandidate) {
           // QR candidate missing from DB → flag with db_votes: 0
           discrepancies.push({
@@ -483,11 +532,10 @@ export class ScanService implements OnModuleInit {
         continue;
       }
 
-      for (const dbCandidate of dbContest.candidates) {
+      for (let idx = 0; idx < dbContest.candidates.length; idx++) {
+        const dbCandidate = dbContest.candidates[idx];
         if (dbCandidate.candidate === 'Unparsed QR Data') continue;
-        const qrCandidate = qrContest.candidates.find(
-          c => c.candidate === dbCandidate.candidate,
-        );
+        const qrCandidate = matchQrCandidate(qrContest.candidates, dbCandidate, idx);
         if (!qrCandidate) {
           // DB candidate missing from QR → flag with qr_votes: 0
           discrepancies.push({
