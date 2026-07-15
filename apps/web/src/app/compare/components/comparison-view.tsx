@@ -61,6 +61,7 @@ interface ComparisonViewProps {
   has_discrepancy: boolean;
   discrepancy_details: Discrepancy[];
   qr_metadata?: VcmMetadata;
+  warning?: string;
   onUpload: () => void;
   uploading?: boolean;
 }
@@ -144,6 +145,7 @@ export function ComparisonView({
   has_discrepancy,
   discrepancy_details,
   qr_metadata,
+  warning,
   onUpload,
   uploading,
 }: ComparisonViewProps) {
@@ -182,6 +184,13 @@ export function ComparisonView({
           )}
         </div>
       </div>
+
+      {/* System warning (auto-detect failed, DB query error, etc.) */}
+      {warning && (
+        <div className="rounded-lg border border-orange-300 bg-orange-50 p-4">
+          <p className="text-sm font-medium text-orange-800">{warning}</p>
+        </div>
+      )}
 
       {/* Raw unparsed QR data warning */}
       {hasRawQR && (

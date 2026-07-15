@@ -23,6 +23,7 @@ interface ComparisonResult {
   db_results: any[];
   has_discrepancy: boolean;
   discrepancy_details: any[];
+  warning?: string;
 }
 
 /**
@@ -320,6 +321,7 @@ export default function ComparePage() {
             db_results={comparison.db_results}
             has_discrepancy={comparison.has_discrepancy}
             discrepancy_details={comparison.discrepancy_details}
+            warning={comparison.warning}
             onUpload={handleUpload}
             uploading={isUploading}
           />

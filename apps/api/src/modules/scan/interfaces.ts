@@ -50,4 +50,6 @@ export interface ComparisonResult {
   discrepancy_details: Discrepancy[];
   /** Parsed metadata from QR3, if available */
   qr_metadata?: VcmMetadata;
+  /** Warning message if auto-detect failed or DB query errored */
+  warning?: string;
 }

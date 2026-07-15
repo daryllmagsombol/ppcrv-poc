@@ -49,15 +49,29 @@ export class ScanService implements OnModuleInit {
   }
 
   async compare(dto: ScanCompareDto): Promise<ComparisonResult> {
+    let warning: string | undefined;
+
     // Auto-detect precinct from QR if not provided
     let precinctId = dto.precinct_id;
     if (precinctId === 'auto-detect' || !precinctId) {
       const detected = this.extractPrecinctFromQr(dto);
-      if (detected) precinctId = detected;
+      if (detected) {
+        precinctId = detected;
+      } else {
+        precinctId = 'unknown';
+        warning = 'Could not auto-detect precinct from scanned QR codes. Did you scan a metadata QR?';
+      }
     }
 
     const qrParsed = this.parseQrData(dto);
-    const dbResults = await this.queryPrecinctResults(precinctId);
+
+    // Query DuckDB for election results
+    let dbResults: ContestResult[] = [];
+    try {
+      dbResults = await this.queryPrecinctResults(precinctId);
+    } catch (e: any) {
+      warning = `Election database query failed: ${e?.message || e}`;
+    }
 
     // Resolve VCM position numbers to real candidate names
     await this.resolveQrPositions(qrParsed);
@@ -102,6 +116,7 @@ export class ScanService implements OnModuleInit {
       db_results: dbResults,
       has_discrepancy: discrepancies.length > 0,
       discrepancy_details: discrepancies,
+      warning,
     };
   }
 
@@ -307,68 +322,62 @@ export class ScanService implements OnModuleInit {
   }
 
   private async queryPrecinctResults(precinctId: string): Promise<ContestResult[]> {
-    try {
-      // 1. Look up precinct geography from PostgreSQL ref_precincts
-      const geoResult = await this.pool.query(
-        `SELECT reg_name, prv_name, mun_name, brgy_name, pollplace
-         FROM ref_precincts WHERE acm_id = $1`,
-        [precinctId],
-      );
+    // 1. Look up precinct geography from PostgreSQL ref_precincts
+    const geoResult = await this.pool.query(
+      `SELECT reg_name, prv_name, mun_name, brgy_name, pollplace
+       FROM ref_precincts WHERE acm_id = $1`,
+      [precinctId],
+    );
 
-      if (geoResult.rows.length === 0) {
-        console.warn(`Precinct ${precinctId} not found in ref_precincts`);
-        return [];
-      }
-
-      const { reg_name, prv_name, mun_name, brgy_name, pollplace } = geoResult.rows[0];
-
-      // 2. Query DuckDB parquet using the geographic hierarchy
-      // Pipe SQL via stdin instead of -c to avoid shell-interpolation vectors
-      const glob = `${this.parquetBase}/precinct/**/*.parquet`;
-      const sql = [
-        `SELECT contest_code, candidate_name, party_code, SUM(total_votes) as votes`,
-        `FROM read_parquet('${glob}')`,
-        `WHERE reg_name = '${reg_name.replace(/'/g, "''")}'`,
-        `  AND prv_name = '${prv_name.replace(/'/g, "''")}'`,
-        `  AND mun_name = '${mun_name.replace(/'/g, "''")}'`,
-        `  AND brgy_name = '${brgy_name.replace(/'/g, "''")}'`,
-        `  AND pollplace = '${pollplace.replace(/'/g, "''")}'`,
-        `GROUP BY contest_code, candidate_name, party_code`,
-        `ORDER BY contest_code, candidate_name`,
-      ].join('\n');
-
-      const output = execFileSync('duckdb', ['-json'], {
-        input: sql,
-        encoding: 'utf-8',
-        maxBuffer: 50 * 1024 * 1024,
-      });
-      const rows = JSON.parse(output);
-
-      const contestMap = new Map<string, any[]>();
-      for (const r of rows) {
-        const code = String(r.contest_code).padStart(8, '0');
-        if (!contestMap.has(code)) contestMap.set(code, []);
-        contestMap.get(code)!.push(r);
-      }
-
-      const results: ContestResult[] = [];
-      for (const [code, contestRows] of contestMap) {
-        results.push({
-          contest_code: code,
-          contest_name: this.categoryFromCode(code),
-          category: this.categoryFromCode(code),
-          candidates: contestRows.map(r => ({
-            candidate: r.candidate_name,
-            party: r.party_code || '',
-            votes: Number(r.votes),
-          })),
-        });
-      }
-      return results;
-    } catch (e) {
-      console.warn('Failed to query DuckDB for precinct:', e);
+    if (geoResult.rows.length === 0) {
       return [];
     }
+
+    const { reg_name, prv_name, mun_name, brgy_name, pollplace } = geoResult.rows[0];
+
+    // 2. Query DuckDB parquet using the geographic hierarchy
+    // Pipe SQL via stdin instead of -c to avoid shell-interpolation vectors
+    const glob = `${this.parquetBase}/precinct/**/*.parquet`;
+    const sql = [
+      `SELECT contest_code, candidate_name, party_code, SUM(total_votes) as votes`,
+      `FROM read_parquet('${glob}')`,
+      `WHERE reg_name = '${reg_name.replace(/'/g, "''")}'`,
+      `  AND prv_name = '${prv_name.replace(/'/g, "''")}'`,
+      `  AND mun_name = '${mun_name.replace(/'/g, "''")}'`,
+      `  AND brgy_name = '${brgy_name.replace(/'/g, "''")}'`,
+      `  AND pollplace = '${pollplace.replace(/'/g, "''")}'`,
+      `GROUP BY contest_code, candidate_name, party_code`,
+      `ORDER BY contest_code, candidate_name`,
+    ].join('\n');
+
+    const output = execFileSync('duckdb', ['-json'], {
+      input: sql,
+      encoding: 'utf-8',
+      maxBuffer: 50 * 1024 * 1024,
+    });
+    const rows = JSON.parse(output);
+
+    const contestMap = new Map<string, any[]>();
+    for (const r of rows) {
+      const code = String(r.contest_code).padStart(8, '0');
+      if (!contestMap.has(code)) contestMap.set(code, []);
+      contestMap.get(code)!.push(r);
+    }
+
+    const results: ContestResult[] = [];
+    for (const [code, contestRows] of contestMap) {
+      results.push({
+        contest_code: code,
+        contest_name: this.categoryFromCode(code),
+        category: this.categoryFromCode(code),
+        candidates: contestRows.map(r => ({
+          candidate: r.candidate_name,
+          party: r.party_code || '',
+          votes: Number(r.votes),
+        })),
+      });
+    }
+    return results;
   }
 
   private categoryFromCode(contestCode: string): string {
