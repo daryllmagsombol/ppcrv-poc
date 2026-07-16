@@ -1,5 +1,6 @@
-import { Controller, Get, Param, UsePipes, ValidationPipe } from '@nestjs/common';
-import { AnalyticsService, RegionStatus } from './analytics.service';
+import { Controller, Get, Param, Query, UsePipes, ValidationPipe } from '@nestjs/common';
+import { AnalyticsService, RegionStatus, VoteShareResponse } from './analytics.service';
+import { VoteShareQueryDto } from './dto/vote-share-query.dto';
 
 @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
 @Controller('api/analytics')
@@ -19,5 +20,10 @@ export class AnalyticsController {
   @Get('geography-status/regions/:reg/provinces/:prv')
   getCityStatus(@Param('reg') reg: string, @Param('prv') prv: string) {
     return this.analyticsService.getCityStatus(reg, prv);
+  }
+
+  @Get('vote-share')
+  getVoteShare(@Query() query: VoteShareQueryDto): VoteShareResponse {
+    return this.analyticsService.getVoteShare(query);
   }
 }

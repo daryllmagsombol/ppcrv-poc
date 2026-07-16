@@ -23,6 +23,20 @@ interface CityStatus {
   completionRate: number;
 }
 
+export interface VoteShareCandidate {
+  name: string;
+  party: string;
+  votes: number;
+  percentage: number;
+}
+
+export interface VoteShareResponse {
+  contest: string;
+  contestName: string;
+  totalVotes: number;
+  candidates: VoteShareCandidate[];
+}
+
 @Injectable()
 export class AnalyticsService {
   private readonly parquetBase: string;
@@ -96,6 +110,52 @@ export class AnalyticsService {
         ? Math.round((Number(r.reported_precincts) / Number(r.total_precincts)) * 100)
         : 0,
     }));
+  }
+
+  getVoteShare(params: { contest?: string; reg?: string; prv?: string; mun?: string }): VoteShareResponse {
+    const level = params.mun ? 'municipality' : params.prv ? 'province' : params.reg ? 'region' : 'national';
+    const glob = `${this.parquetBase}/${level}/**/*.parquet`;
+
+    const where: string[] = [];
+    if (params.contest) where.push(`LPAD(CAST(contest_code AS VARCHAR), 8, '0') = '${params.contest.replace(/'/g, "''")}'`);
+    if (params.reg) where.push(`reg_name = '${params.reg.replace(/'/g, "''")}'`);
+    if (params.prv) where.push(`prv_name = '${params.prv.replace(/'/g, "''")}'`);
+    if (params.mun) where.push(`mun_name = '${params.mun.replace(/'/g, "''")}'`);
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const sql = `
+      SELECT candidate_name, party_code, SUM(total_votes) as votes
+      FROM '${glob}'
+      ${whereClause}
+      GROUP BY candidate_name, party_code
+      ORDER BY votes DESC
+    `.trim().replace(/\s+/g, ' ');
+
+    let rows: any[];
+    try {
+      const output = execFileSync('duckdb', ['-json', '-c', sql], {
+        encoding: 'utf-8',
+        maxBuffer: 50 * 1024 * 1024,
+      });
+      rows = JSON.parse(output);
+    } catch {
+      throw new BadRequestException('Failed to query vote share data');
+    }
+
+    const totalVotes = rows.reduce((sum: number, r: any) => sum + Number(r.votes || 0), 0);
+    const candidates: VoteShareCandidate[] = rows.map((r: any) => ({
+      name: r.candidate_name,
+      party: r.party_code || '',
+      votes: Number(r.votes),
+      percentage: totalVotes > 0 ? Math.round((Number(r.votes) / totalVotes) * 1000) / 10 : 0,
+    }));
+
+    return {
+      contest: params.contest || 'all',
+      contestName: '',
+      totalVotes,
+      candidates,
+    };
   }
 
   getCityStatus(region: string, province: string): CityStatus[] {
