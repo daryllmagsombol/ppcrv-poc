@@ -41,6 +41,12 @@ export interface UndervoteResponse {
   overvoteRate: number;
 }
 
+export interface ContestItem {
+  code: string;
+  name: string;
+  category: string;
+}
+
 export interface GeoSelection {
   level: 'national' | 'region' | 'province' | 'city';
   region?: string;

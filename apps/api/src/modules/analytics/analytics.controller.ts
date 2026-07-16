@@ -1,5 +1,5 @@
 import { Controller, Get, Param, Query, UsePipes, ValidationPipe } from '@nestjs/common';
-import { AnalyticsService, RegionStatus, VoteShareResponse, UndervoteResponse } from './analytics.service';
+import { AnalyticsService, RegionStatus, ProvinceStatus, CityStatus, VoteShareResponse, UndervoteResponse } from './analytics.service';
 import { VoteShareQueryDto } from './dto/vote-share-query.dto';
 import { UndervotesQueryDto } from './dto/undervotes-query.dto';
 
@@ -14,12 +14,12 @@ export class AnalyticsController {
   }
 
   @Get('geography-status/regions/:reg')
-  getProvinceStatus(@Param('reg') reg: string) {
+  getProvinceStatus(@Param('reg') reg: string): ProvinceStatus[] {
     return this.analyticsService.getProvinceStatus(reg);
   }
 
   @Get('geography-status/regions/:reg/provinces/:prv')
-  getCityStatus(@Param('reg') reg: string, @Param('prv') prv: string) {
+  getCityStatus(@Param('reg') reg: string, @Param('prv') prv: string): CityStatus[] {
     return this.analyticsService.getCityStatus(reg, prv);
   }
 

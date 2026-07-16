@@ -9,14 +9,14 @@ export interface RegionStatus {
   completionRate: number;
 }
 
-interface ProvinceStatus {
+export interface ProvinceStatus {
   name: string;
   totalPrecincts: number;
   reportedPrecincts: number;
   completionRate: number;
 }
 
-interface CityStatus {
+export interface CityStatus {
   name: string;
   totalPrecincts: number;
   reportedPrecincts: number;
@@ -55,15 +55,23 @@ export class AnalyticsService {
       path.resolve(__dirname, '..', '..', '..', '..', '..', 'apps', 'etl', 'output');
   }
 
-  getGeographyStatus(): RegionStatus[] {
-    const glob = `${this.parquetBase}/region/**/*.parquet`;
+  private queryGeographyStatus(
+    whereClause: string,
+    selectCol: string,
+  ): { name: string; totalPrecincts: number; reportedPrecincts: number; completionRate: number }[] {
+    const glob = `${this.parquetBase}/precinct/**/*.parquet`;
     const sql = `
-      SELECT reg_name,
-             COUNT(DISTINCT pollplace) as total_precincts,
-             SUM(CASE WHEN total_votes > 0 THEN 1 ELSE 0 END) as reported_precincts
-      FROM '${glob}'
-      GROUP BY reg_name
-      ORDER BY reg_name
+      SELECT ${selectCol},
+             COUNT(*) as total_precincts,
+             SUM(CASE WHEN has_votes > 0 THEN 1 ELSE 0 END) as reported_precincts
+      FROM (
+        SELECT ${selectCol}, pollplace, SUM(total_votes) as has_votes
+        FROM '${glob}'
+        ${whereClause}
+        GROUP BY ${selectCol}, pollplace
+      ) sub
+      GROUP BY ${selectCol}
+      ORDER BY ${selectCol}
     `.trim().replace(/\s+/g, ' ');
 
     let rows: any[];
@@ -72,13 +80,17 @@ export class AnalyticsService {
         encoding: 'utf-8',
         maxBuffer: 50 * 1024 * 1024,
       });
-      rows = JSON.parse(output);
-    } catch {
-      throw new BadRequestException('Failed to query geography status');
+      rows = output.trim() ? JSON.parse(output) : [];
+    } catch (e: any) {
+      if (e instanceof SyntaxError) {
+        rows = [];
+      } else {
+        throw new BadRequestException('Failed to query geography status');
+      }
     }
 
     return rows.map(r => ({
-      name: r.reg_name,
+      name: r[selectCol],
       totalPrecincts: Number(r.total_precincts),
       reportedPrecincts: Number(r.reported_precincts),
       completionRate: Number(r.total_precincts) > 0
@@ -87,37 +99,13 @@ export class AnalyticsService {
     }));
   }
 
+  getGeographyStatus(): RegionStatus[] {
+    return this.queryGeographyStatus('', 'reg_name');
+  }
+
   getProvinceStatus(region: string): ProvinceStatus[] {
-    const glob = `${this.parquetBase}/province/**/*.parquet`;
-    const sql = `
-      SELECT prv_name,
-             COUNT(DISTINCT pollplace) as total_precincts,
-             SUM(CASE WHEN total_votes > 0 THEN 1 ELSE 0 END) as reported_precincts
-      FROM '${glob}'
-      WHERE reg_name = '${region.replace(/'/g, "''")}'
-      GROUP BY prv_name
-      ORDER BY prv_name
-    `.trim().replace(/\s+/g, ' ');
-
-    let rows: any[];
-    try {
-      const output = execFileSync('duckdb', ['-json', '-c', sql], {
-        encoding: 'utf-8',
-        maxBuffer: 50 * 1024 * 1024,
-      });
-      rows = JSON.parse(output);
-    } catch {
-      throw new BadRequestException(`Failed to query province status for region: ${region}`);
-    }
-
-    return rows.map(r => ({
-      name: r.prv_name,
-      totalPrecincts: Number(r.total_precincts),
-      reportedPrecincts: Number(r.reported_precincts),
-      completionRate: Number(r.total_precincts) > 0
-        ? Math.round((Number(r.reported_precincts) / Number(r.total_precincts)) * 100)
-        : 0,
-    }));
+    const where = `WHERE reg_name = '${region.replace(/'/g, "''")}'`;
+    return this.queryGeographyStatus(where, 'prv_name');
   }
 
   getVoteShare(params: { contest?: string; reg?: string; prv?: string; mun?: string }): VoteShareResponse {
@@ -145,9 +133,13 @@ export class AnalyticsService {
         encoding: 'utf-8',
         maxBuffer: 50 * 1024 * 1024,
       });
-      rows = JSON.parse(output);
-    } catch {
-      throw new BadRequestException('Failed to query vote share data');
+      rows = output.trim() ? JSON.parse(output) : [];
+    } catch (e: any) {
+      if (e instanceof SyntaxError) {
+        rows = [];
+      } else {
+        throw new BadRequestException('Failed to query vote share data');
+      }
     }
 
     const totalVotes = rows.reduce((sum: number, r: any) => sum + Number(r.votes || 0), 0);
@@ -179,8 +171,8 @@ export class AnalyticsService {
     const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
     const sql = `
       SELECT SUM(total_votes) as total_votes,
-             SUM(total_under_votes) as total_under_votes,
-             SUM(total_over_votes) as total_over_votes
+             MIN(total_under_votes) as total_under_votes,
+             MIN(total_over_votes) as total_over_votes
       FROM '${glob}'
       ${whereClause}
     `.trim().replace(/\s+/g, ' ');
@@ -191,9 +183,13 @@ export class AnalyticsService {
         encoding: 'utf-8',
         maxBuffer: 50 * 1024 * 1024,
       });
-      rows = JSON.parse(output);
-    } catch {
-      throw new BadRequestException('Failed to query undervote data');
+      rows = output.trim() ? JSON.parse(output) : [];
+    } catch (e: any) {
+      if (e instanceof SyntaxError) {
+        rows = [];
+      } else {
+        throw new BadRequestException('Failed to query undervote data');
+      }
     }
 
     const totalVotes = Number(rows[0]?.total_votes || 0);
@@ -210,36 +206,7 @@ export class AnalyticsService {
   }
 
   getCityStatus(region: string, province: string): CityStatus[] {
-    const glob = `${this.parquetBase}/municipality/**/*.parquet`;
-    const sql = `
-      SELECT mun_name,
-             COUNT(DISTINCT pollplace) as total_precincts,
-             SUM(CASE WHEN total_votes > 0 THEN 1 ELSE 0 END) as reported_precincts
-      FROM '${glob}'
-      WHERE reg_name = '${region.replace(/'/g, "''")}'
-        AND prv_name = '${province.replace(/'/g, "''")}'
-      GROUP BY mun_name
-      ORDER BY mun_name
-    `.trim().replace(/\s+/g, ' ');
-
-    let rows: any[];
-    try {
-      const output = execFileSync('duckdb', ['-json', '-c', sql], {
-        encoding: 'utf-8',
-        maxBuffer: 50 * 1024 * 1024,
-      });
-      rows = JSON.parse(output);
-    } catch {
-      throw new BadRequestException(`Failed to query city status for province: ${province}`);
-    }
-
-    return rows.map(r => ({
-      name: r.mun_name,
-      totalPrecincts: Number(r.total_precincts),
-      reportedPrecincts: Number(r.reported_precincts),
-      completionRate: Number(r.total_precincts) > 0
-        ? Math.round((Number(r.reported_precincts) / Number(r.total_precincts)) * 100)
-        : 0,
-    }));
+    const where = `WHERE reg_name = '${region.replace(/'/g, "''")}' AND prv_name = '${province.replace(/'/g, "''")}'`;
+    return this.queryGeographyStatus(where, 'mun_name');
   }
 }
