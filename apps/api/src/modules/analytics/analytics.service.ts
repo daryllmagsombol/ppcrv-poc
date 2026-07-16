@@ -30,6 +30,14 @@ export interface VoteShareCandidate {
   percentage: number;
 }
 
+export interface UndervoteResponse {
+  totalVotes: number;
+  totalUndervotes: number;
+  totalOvervotes: number;
+  undervoteRate: number;
+  overvoteRate: number;
+}
+
 export interface VoteShareResponse {
   contest: string;
   contestName: string;
@@ -155,6 +163,49 @@ export class AnalyticsService {
       contestName: '',
       totalVotes,
       candidates,
+    };
+  }
+
+  getUndervotes(params: { contest?: string; reg?: string; prv?: string; mun?: string }): UndervoteResponse {
+    const level = params.mun ? 'municipality' : params.prv ? 'province' : params.reg ? 'region' : 'national';
+    const glob = `${this.parquetBase}/${level}/**/*.parquet`;
+
+    const where: string[] = [];
+    if (params.contest) where.push(`LPAD(CAST(contest_code AS VARCHAR), 8, '0') = '${params.contest.replace(/'/g, "''")}'`);
+    if (params.reg) where.push(`reg_name = '${params.reg.replace(/'/g, "''")}'`);
+    if (params.prv) where.push(`prv_name = '${params.prv.replace(/'/g, "''")}'`);
+    if (params.mun) where.push(`mun_name = '${params.mun.replace(/'/g, "''")}'`);
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const sql = `
+      SELECT SUM(total_votes) as total_votes,
+             SUM(total_under_votes) as total_under_votes,
+             SUM(total_over_votes) as total_over_votes
+      FROM '${glob}'
+      ${whereClause}
+    `.trim().replace(/\s+/g, ' ');
+
+    let rows: any[];
+    try {
+      const output = execFileSync('duckdb', ['-json', '-c', sql], {
+        encoding: 'utf-8',
+        maxBuffer: 50 * 1024 * 1024,
+      });
+      rows = JSON.parse(output);
+    } catch {
+      throw new BadRequestException('Failed to query undervote data');
+    }
+
+    const totalVotes = Number(rows[0]?.total_votes || 0);
+    const totalUndervotes = Number(rows[0]?.total_under_votes || 0);
+    const totalOvervotes = Number(rows[0]?.total_over_votes || 0);
+
+    return {
+      totalVotes,
+      totalUndervotes,
+      totalOvervotes,
+      undervoteRate: totalVotes > 0 ? Math.round((totalUndervotes / totalVotes) * 1000) / 10 : 0,
+      overvoteRate: totalVotes > 0 ? Math.round((totalOvervotes / totalVotes) * 1000) / 10 : 0,
     };
   }
 

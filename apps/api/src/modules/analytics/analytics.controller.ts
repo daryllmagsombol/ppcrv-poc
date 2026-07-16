@@ -1,6 +1,7 @@
 import { Controller, Get, Param, Query, UsePipes, ValidationPipe } from '@nestjs/common';
-import { AnalyticsService, RegionStatus, VoteShareResponse } from './analytics.service';
+import { AnalyticsService, RegionStatus, VoteShareResponse, UndervoteResponse } from './analytics.service';
 import { VoteShareQueryDto } from './dto/vote-share-query.dto';
+import { UndervotesQueryDto } from './dto/undervotes-query.dto';
 
 @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
 @Controller('api/analytics')
@@ -25,5 +26,10 @@ export class AnalyticsController {
   @Get('vote-share')
   getVoteShare(@Query() query: VoteShareQueryDto): VoteShareResponse {
     return this.analyticsService.getVoteShare(query);
+  }
+
+  @Get('undervotes')
+  getUndervotes(@Query() query: UndervotesQueryDto): UndervoteResponse {
+    return this.analyticsService.getUndervotes(query);
   }
 }

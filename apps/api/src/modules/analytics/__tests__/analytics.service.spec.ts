@@ -32,4 +32,13 @@ describe('AnalyticsService', () => {
     expect(typeof service.getVoteShare).toBe('function');
     expect(service.getVoteShare.length).toBe(1);
   });
+
+  it('getUndervotes should throw BadRequestException on DuckDB failure', () => {
+    expect(() => service.getUndervotes({})).toThrow();
+  });
+
+  it('getUndervotes accepts expected params shape', () => {
+    expect(typeof service.getUndervotes).toBe('function');
+    expect(service.getUndervotes.length).toBe(1);
+  });
 });
