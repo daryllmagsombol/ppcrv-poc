@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -54,7 +54,7 @@ function MapContent({
         setGeoKey(k => k + 1);
       })
       .catch(() => setGeoJsonData(null));
-  }, [geoSelection.level]);
+  }, [geoSelection.level, geoSelection.region, geoSelection.province]);
 
   useEffect(() => {
     if (geoSelection.level === 'national') {
@@ -63,21 +63,55 @@ function MapContent({
   }, [geoSelection.level, map]);
 
   if (!geoJsonData) {
-    return (
-      <div className="h-80 overflow-y-auto">
-        <h3 className="mb-2 text-sm font-semibold text-gray-500">REGIONS</h3>
-        {regionStatuses.map(r => (
-          <button
-            key={r.name}
-            onClick={() => onSelectRegion(r.name)}
-            className="flex w-full items-center justify-between border-b px-2 py-1.5 text-left text-sm hover:bg-gray-50"
-          >
-            <span>{r.name}</span>
-            <span className="text-xs text-gray-400">{r.completionRate}%</span>
-          </button>
-        ))}
-      </div>
-    );
+    if (geoSelection.level === 'national') {
+      return (
+        <div className="h-80 overflow-y-auto">
+          <h3 className="mb-2 text-sm font-semibold text-gray-500">REGIONS</h3>
+          {regionStatuses.map(r => (
+            <button
+              key={r.name}
+              onClick={() => onSelectRegion(r.name)}
+              className="flex w-full items-center justify-between border-b px-2 py-1.5 text-left text-sm hover:bg-gray-50"
+            >
+              <span>{r.name}</span>
+              <span className="text-xs text-gray-400">{r.completionRate}%</span>
+            </button>
+          ))}
+        </div>
+      );
+    } else if (geoSelection.level === 'region') {
+      return (
+        <div className="h-80 overflow-y-auto">
+          <h3 className="mb-2 text-sm font-semibold text-gray-500">PROVINCES</h3>
+          {provinceStatuses.map(r => (
+            <button
+              key={r.name}
+              onClick={() => geoSelection.region && onSelectProvince(geoSelection.region, r.name)}
+              className="flex w-full items-center justify-between border-b px-2 py-1.5 text-left text-sm hover:bg-gray-50"
+            >
+              <span>{r.name}</span>
+              <span className="text-xs text-gray-400">{r.completionRate}%</span>
+            </button>
+          ))}
+        </div>
+      );
+    } else if (geoSelection.level === 'province') {
+      return (
+        <div className="h-80 overflow-y-auto">
+          <h3 className="mb-2 text-sm font-semibold text-gray-500">CITIES</h3>
+          {cityStatuses.map(r => (
+            <button
+              key={r.name}
+              onClick={() => geoSelection.region && geoSelection.province && onSelectCity(geoSelection.region, geoSelection.province, r.name)}
+              className="flex w-full items-center justify-between border-b px-2 py-1.5 text-left text-sm hover:bg-gray-50"
+            >
+              <span>{r.name}</span>
+              <span className="text-xs text-gray-400">{r.completionRate}%</span>
+            </button>
+          ))}
+        </div>
+      );
+    }
   }
 
   const statusMap = new Map<string, number>();
