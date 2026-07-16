@@ -18,7 +18,7 @@ import * as path from 'path';
 
 const REDIS_URL = process.env.REDIS_URL;
 const PARQUET_BASE = process.env.PARQUET_BASE_PATH || path.resolve(__dirname, '..', '..', '..', 'apps', 'etl', 'output');
-const CONTEST_NAMES_PATH = path.resolve(PARQUET_BASE, '..', 'contest-names.json');
+const CONTEST_NAMES_PATH = process.env.CONTEST_NAMES_PATH || path.resolve(PARQUET_BASE, '..', '..', '..', 'data', 'contest-names.json');
 
 if (!REDIS_URL) {
   console.error('ERROR: REDIS_URL environment variable is required');
@@ -142,259 +142,189 @@ async function seedGeographyStatus(redis: Redis): Promise<number> {
   totalKeys += provinceCount;
   console.log(`  Loaded ${provinceCount} provinces`);
 
-  // ── Cities (top 50 provinces only to manage Redis key count) ──
-  console.log('  Cities (top 50 provinces)...');
+  // ── Cities (single batch query for all cities) ──
+  console.log('  Cities (batch query)...');
   let cityCount = 0;
 
-  // Get all province/region pairs
-  const provinceList: { reg: string; prv: string }[] = [];
-  for (const reg of regions) {
-    const provs = await query(`
-      SELECT DISTINCT prv_name
+  const allCities = await query(`
+    SELECT reg_name, prv_name, mun_name,
+           COUNT(*) as total_precincts,
+           SUM(CASE WHEN has_votes > 0 THEN 1 ELSE 0 END) as reported_precincts
+    FROM (
+      SELECT reg_name, prv_name, mun_name, pollplace, SUM(total_votes) as has_votes
       FROM read_parquet('${esc(levelGlob('precinct'))}', union_by_name=true)
-      WHERE reg_name = '${esc(String(reg.reg_name))}'
-    `.trim().replace(/\s+/g, ' '));
-    for (const p of provs) {
-      provinceList.push({ reg: String(reg.reg_name), prv: String(p.prv_name) });
-    }
+      GROUP BY reg_name, prv_name, mun_name, pollplace
+    ) sub
+    GROUP BY reg_name, prv_name, mun_name
+    ORDER BY reg_name, prv_name, mun_name
+  `.trim().replace(/\s+/g, ' '));
+
+  // Group cities by region:province and load into Redis
+  const cityGroups: Map<string, { name: string; totalPrecincts: number; reportedPrecincts: number; completionRate: number }[]> = new Map();
+  for (const c of allCities) {
+    const reg = String(c.reg_name);
+    const prv = String(c.prv_name);
+    const groupKey = `${reg}:${prv}`;
+    const total = Number(c.total_precincts || 0);
+    const reported = Number(c.reported_precincts || 0);
+    const cr = total > 0 ? Math.round((reported / total) * 100) : 0;
+    if (!cityGroups.has(groupKey)) cityGroups.set(groupKey, []);
+    cityGroups.get(groupKey)!.push({ name: String(c.mun_name), totalPrecincts: total, reportedPrecincts: reported, completionRate: cr });
   }
 
-  const topProvinces = provinceList.slice(0, 50);
-  for (const { reg, prv } of topProvinces) {
-    const cities = await query(`
-      SELECT mun_name,
-             COUNT(*) as total_precincts,
-             SUM(CASE WHEN has_votes > 0 THEN 1 ELSE 0 END) as reported_precincts
-      FROM (
-        SELECT mun_name, pollplace, SUM(total_votes) as has_votes
-        FROM read_parquet('${esc(levelGlob('precinct'))}', union_by_name=true)
-        WHERE reg_name = '${esc(reg)}' AND prv_name = '${esc(prv)}'
-        GROUP BY mun_name, pollplace
-      ) sub
-      GROUP BY mun_name
-      ORDER BY mun_name
-    `.trim().replace(/\s+/g, ' '));
-
-    if (cities.length > 0) {
-      const pipeline = redis.pipeline();
-      const key = `analytics:geo:city:${reg}:${prv}`;
-      for (const c of cities) {
-        const total = Number(c.total_precincts || 0);
-        const reported = Number(c.reported_precincts || 0);
-        const cr = total > 0 ? Math.round((reported / total) * 100) : 0;
-        pipeline.hset(key, String(c.mun_name), JSON.stringify({
-          name: c.mun_name, totalPrecincts: total, reportedPrecincts: reported, completionRate: cr,
-        }));
-      }
-      await pipeline.exec();
-      cityCount += cities.length;
+  const pipeline = redis.pipeline();
+  for (const [groupKey, cities] of cityGroups) {
+    const key = `analytics:geo:city:${groupKey}`;
+    for (const c of cities) {
+      pipeline.hset(key, c.name, JSON.stringify(c));
+      cityCount++;
     }
   }
+  if (cityCount > 0) await pipeline.exec();
   totalKeys += cityCount;
-  console.log(`  Loaded ${cityCount} cities (${provinceList.length - topProvinces.length} provinces skipped)`);
+  console.log(`  Loaded ${cityCount} cities across ${cityGroups.size} province groups`);
 
   return totalKeys;
 }
 
 async function seedVoteShare(redis: Redis): Promise<number> {
-  console.log('Seeding vote share...');
+  console.log('Seeding vote share (batch mode)...');
 
-  // Get all distinct contest codes from national-level data
-  const contests = await query(`
-    SELECT DISTINCT LPAD(CAST(contest_code AS VARCHAR), 8, '0') as code
+  // National: single query for ALL contests
+  console.log('  National level...');
+  const natRows = await query(`
+    SELECT LPAD(CAST(contest_code AS VARCHAR), 8, '0') as contest,
+           candidate_name, party_code, SUM(total_votes) as votes
     FROM read_parquet('${esc(levelGlob('national'))}', union_by_name=true)
-    ORDER BY code
+    GROUP BY contest, candidate_name, party_code
+    ORDER BY contest, votes DESC
   `.trim().replace(/\s+/g, ' '));
 
-  console.log(`  Found ${contests.length} contests`);
+  let totalKeys = await groupAndLoadVoteShare(redis, natRows, 'nat', null);
+  console.log(`  National: ${totalKeys} keys`);
 
-  const levels: { name: string; label: string }[] = [
-    { name: 'national', label: 'nat' },
-    { name: 'region', label: 'reg' },
-    { name: 'province', label: 'prv' },
-    { name: 'municipality', label: 'mun' },
+  // Geo levels: single query per level, grouped by contest + geo
+  const geoLevels = [
+    { name: 'region', label: 'reg', col: 'reg_name' },
+    { name: 'province', label: 'prv', col: 'prv_name' },
+    { name: 'municipality', label: 'mun', col: 'mun_name' },
   ];
 
-  let totalKeys = 0;
+  for (const level of geoLevels) {
+    console.log(`  ${level.name} level...`);
+    const rows = await query(`
+      SELECT LPAD(CAST(contest_code AS VARCHAR), 8, '0') as contest,
+             ${level.col} as geo,
+             candidate_name, party_code, SUM(total_votes) as votes
+      FROM read_parquet('${esc(levelGlob(level.name))}', union_by_name=true)
+      GROUP BY contest, ${level.col}, candidate_name, party_code
+      ORDER BY contest, ${level.col}, votes DESC
+    `.trim().replace(/\s+/g, ' '));
 
-  for (let ci = 0; ci < contests.length; ci++) {
-    const code = String(contests[ci].code);
-
-    for (const level of levels) {
-      if (level.name === 'national') {
-        // National level — single key
-        const rows = await query(`
-          SELECT candidate_name, party_code, SUM(total_votes) as votes
-          FROM read_parquet('${esc(levelGlob(level.name))}', union_by_name=true)
-          WHERE LPAD(CAST(contest_code AS VARCHAR), 8, '0') = '${esc(code)}'
-          GROUP BY candidate_name, party_code
-          ORDER BY votes DESC
-        `.trim().replace(/\s+/g, ' '));
-
-        if (rows.length === 0) continue;
-
-        const totalVotes = rows.reduce((sum, r) => sum + Number(r.votes || 0), 0);
-        const candidates = rows.map(r => ({
-          name: r.candidate_name,
-          party: String(r.party_code || ''),
-          votes: Number(r.votes),
-          percentage: totalVotes > 0 ? Math.round((Number(r.votes) / totalVotes) * 1000) / 10 : 0,
-        }));
-
-        const key = `analytics:votes:${code}:nat`;
-        await redis.set(key, JSON.stringify({ contest: code, contestName: '', totalVotes, candidates }));
-        totalKeys++;
-        continue;
-      }
-
-      // Geo-level: get distinct geographies for this contest
-      const geoCol = level.name === 'region' ? 'reg_name'
-        : level.name === 'province' ? 'prv_name'
-        : 'mun_name';
-
-      const geos = await query(`
-        SELECT DISTINCT ${geoCol} as geo
-        FROM read_parquet('${esc(levelGlob(level.name))}', union_by_name=true)
-        WHERE LPAD(CAST(contest_code AS VARCHAR), 8, '0') = '${esc(code)}'
-      `.trim().replace(/\s+/g, ' '));
-
-      const pipeline = redis.pipeline();
-      let batchCount = 0;
-
-      for (const g of geos) {
-        const geoKey = String(g.geo);
-        const whereClause = `WHERE LPAD(CAST(contest_code AS VARCHAR), 8, '0') = '${esc(code)}' AND ${geoCol} = '${esc(geoKey)}'`;
-        const rows = await query(`
-          SELECT candidate_name, party_code, SUM(total_votes) as votes
-          FROM read_parquet('${esc(levelGlob(level.name))}', union_by_name=true)
-          ${whereClause}
-          GROUP BY candidate_name, party_code
-          ORDER BY votes DESC
-        `.trim().replace(/\s+/g, ' '));
-
-        if (rows.length === 0) continue;
-
-        const totalVotes = rows.reduce((sum, r) => sum + Number(r.votes || 0), 0);
-        const candidates = rows.map(r => ({
-          name: r.candidate_name,
-          party: String(r.party_code || ''),
-          votes: Number(r.votes),
-          percentage: totalVotes > 0 ? Math.round((Number(r.votes) / totalVotes) * 1000) / 10 : 0,
-        }));
-
-        pipeline.set(`analytics:votes:${code}:${level.label}:${geoKey}`, JSON.stringify({
-          contest: code, contestName: '', totalVotes, candidates,
-        }));
-        batchCount++;
-      }
-
-      if (batchCount > 0) {
-        await pipeline.exec();
-        totalKeys += batchCount;
-      }
-    }
-
-    if ((ci + 1) % 100 === 0) {
-      console.log(`  Progress: ${ci + 1}/${contests.length} contests processed (${totalKeys} vote share keys)...`);
-    }
+    const count = await groupAndLoadVoteShare(redis, rows, level.label, level.col);
+    totalKeys += count;
+    console.log(`  ${level.name}: ${count} keys`);
   }
 
-  console.log(`  Loaded ${totalKeys} vote share keys`);
+  console.log(`  Loaded ${totalKeys} total vote share keys`);
   return totalKeys;
 }
 
+/** Group raw vote share rows by contest+geo and load into Redis. */
+async function groupAndLoadVoteShare(
+  redis: Redis,
+  rows: Record<string, any>[],
+  levelLabel: string,
+  geoCol: string | null,
+): Promise<number> {
+  // Group rows by redis key
+  const groups: Map<string, { name: string; party: string; votes: number; percentage: number }[]> = new Map();
+
+  for (const r of rows) {
+    const contest = String(r.contest);
+    const geo = geoCol ? String(r[geoCol]) : null;
+    const key = geo
+      ? `analytics:votes:${contest}:${levelLabel}:${geo}`
+      : `analytics:votes:${contest}:${levelLabel}`;
+
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push({
+      name: String(r.candidate_name),
+      party: String(r.party_code || ''),
+      votes: Number(r.votes),
+      percentage: 0, // calculated below
+    });
+  }
+
+  // Calculate percentages and load into Redis
+  const pipeline = redis.pipeline();
+  for (const [key, candidates] of groups) {
+    const totalVotes = candidates.reduce((sum, c) => sum + c.votes, 0);
+    for (const c of candidates) {
+      c.percentage = totalVotes > 0 ? Math.round((c.votes / totalVotes) * 1000) / 10 : 0;
+    }
+    const contest = key.split(':')[2]; // analytics:votes:{contest}:...
+    pipeline.set(key, JSON.stringify({ contest, contestName: '', totalVotes, candidates }));
+  }
+  if (groups.size > 0) await pipeline.exec();
+  return groups.size;
+}
+
 async function seedUndervotes(redis: Redis): Promise<number> {
-  console.log('Seeding undervotes...');
+  console.log('Seeding undervotes (batch mode)...');
 
-  const contests = await query(`
-    SELECT DISTINCT LPAD(CAST(contest_code AS VARCHAR), 8, '0') as code
-    FROM read_parquet('${esc(levelGlob('national'))}', union_by_name=true)
-    ORDER BY code
-  `.trim().replace(/\s+/g, ' '));
-
-  const levels: { name: string; label: string }[] = [
-    { name: 'national', label: 'nat' },
-    { name: 'region', label: 'reg' },
-    { name: 'province', label: 'prv' },
-    { name: 'municipality', label: 'mun' },
+  const levels: { name: string; label: string; col: string | null }[] = [
+    { name: 'national', label: 'nat', col: null },
+    { name: 'region', label: 'reg', col: 'reg_name' },
+    { name: 'province', label: 'prv', col: 'prv_name' },
+    { name: 'municipality', label: 'mun', col: 'mun_name' },
   ];
 
   let totalKeys = 0;
 
-  for (let ci = 0; ci < contests.length; ci++) {
-    const code = String(contests[ci].code);
+  for (const level of levels) {
+    console.log(`  ${level.name} level...`);
 
-    for (const level of levels) {
-      if (level.name === 'national') {
-        const rows = await query(`
-          SELECT SUM(total_votes) as total_votes,
-                 MIN(total_under_votes) as total_under_votes,
-                 MIN(total_over_votes) as total_over_votes
-          FROM read_parquet('${esc(levelGlob(level.name))}', union_by_name=true)
-          WHERE LPAD(CAST(contest_code AS VARCHAR), 8, '0') = '${esc(code)}'
-        `.trim().replace(/\s+/g, ' '));
+    const geoSelect = level.col ? `, ${level.col} as geo` : '';
+    const geoGroup = level.col ? `, ${level.col}` : '';
 
-        const tv = Number(rows[0]?.total_votes || 0);
-        const tuv = Number(rows[0]?.total_under_votes || 0);
-        const tov = Number(rows[0]?.total_over_votes || 0);
+    const rows = await query(`
+      SELECT LPAD(CAST(contest_code AS VARCHAR), 8, '0') as contest${geoSelect},
+             SUM(total_votes) as total_votes,
+             MIN(total_under_votes) as total_under_votes,
+             MIN(total_over_votes) as total_over_votes
+      FROM read_parquet('${esc(levelGlob(level.name))}', union_by_name=true)
+      GROUP BY LPAD(CAST(contest_code AS VARCHAR), 8, '0')${geoGroup}
+    `.trim().replace(/\s+/g, ' '));
 
-        await redis.set(`analytics:undervotes:${code}:nat`, JSON.stringify({
-          totalVotes: tv, totalUndervotes: tuv, totalOvervotes: tov,
-          undervoteRate: tv > 0 ? Math.round((tuv / tv) * 1000) / 10 : 0,
-          overvoteRate: tv > 0 ? Math.round((tov / tv) * 1000) / 10 : 0,
-        }));
-        totalKeys++;
-        continue;
-      }
+    const pipeline = redis.pipeline();
+    let batchCount = 0;
 
-      const geoCol = level.name === 'region' ? 'reg_name'
-        : level.name === 'province' ? 'prv_name'
-        : 'mun_name';
+    for (const r of rows) {
+      const contest = String(r.contest);
+      const geo = level.col ? String(r.geo) : null;
+      const key = geo
+        ? `analytics:undervotes:${contest}:${level.label}:${geo}`
+        : `analytics:undervotes:${contest}:${level.label}`;
 
-      const geos = await query(`
-        SELECT DISTINCT ${geoCol} as geo
-        FROM read_parquet('${esc(levelGlob(level.name))}', union_by_name=true)
-        WHERE LPAD(CAST(contest_code AS VARCHAR), 8, '0') = '${esc(code)}'
-      `.trim().replace(/\s+/g, ' '));
+      const tv = Number(r.total_votes || 0);
+      const tuv = Number(r.total_under_votes || 0);
+      const tov = Number(r.total_over_votes || 0);
 
-      const pipeline = redis.pipeline();
-      let batchCount = 0;
-
-      for (const g of geos) {
-        const geoKey = String(g.geo);
-        const whereClause = `WHERE LPAD(CAST(contest_code AS VARCHAR), 8, '0') = '${esc(code)}' AND ${geoCol} = '${esc(geoKey)}'`;
-        const rows = await query(`
-          SELECT SUM(total_votes) as total_votes,
-                 MIN(total_under_votes) as total_under_votes,
-                 MIN(total_over_votes) as total_over_votes
-          FROM read_parquet('${esc(levelGlob(level.name))}', union_by_name=true)
-          ${whereClause}
-        `.trim().replace(/\s+/g, ' '));
-
-        const tv = Number(rows[0]?.total_votes || 0);
-        const tuv = Number(rows[0]?.total_under_votes || 0);
-        const tov = Number(rows[0]?.total_over_votes || 0);
-
-        pipeline.set(`analytics:undervotes:${code}:${level.label}:${geoKey}`, JSON.stringify({
-          totalVotes: tv, totalUndervotes: tuv, totalOvervotes: tov,
-          undervoteRate: tv > 0 ? Math.round((tuv / tv) * 1000) / 10 : 0,
-          overvoteRate: tv > 0 ? Math.round((tov / tv) * 1000) / 10 : 0,
-        }));
-        batchCount++;
-      }
-
-      if (batchCount > 0) {
-        await pipeline.exec();
-        totalKeys += batchCount;
-      }
+      pipeline.set(key, JSON.stringify({
+        totalVotes: tv, totalUndervotes: tuv, totalOvervotes: tov,
+        undervoteRate: tv > 0 ? Math.round((tuv / tv) * 1000) / 10 : 0,
+        overvoteRate: tv > 0 ? Math.round((tov / tv) * 1000) / 10 : 0,
+      }));
+      batchCount++;
     }
 
-    if ((ci + 1) % 100 === 0) {
-      console.log(`  Progress: ${ci + 1}/${contests.length} contests processed (${totalKeys} undervote keys)...`);
-    }
+    if (batchCount > 0) await pipeline.exec();
+    totalKeys += batchCount;
+    console.log(`  ${level.name}: ${batchCount} keys`);
   }
 
-  console.log(`  Loaded ${totalKeys} undervote keys`);
+  console.log(`  Loaded ${totalKeys} total undervote keys`);
   return totalKeys;
 }
 
