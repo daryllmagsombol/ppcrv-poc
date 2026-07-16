@@ -1,7 +1,12 @@
 'use client';
 
 import { useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { useAnalytics } from './hooks/use-analytics';
+import VoteShareChart from './components/vote-share-chart';
+import UndervotePanel from './components/undervote-panel';
+
+const MapView = dynamic(() => import('./components/map-view'), { ssr: false });
 
 export default function AnalyticsPage() {
   const {
@@ -53,12 +58,19 @@ export default function AnalyticsPage() {
       )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Map View (placeholder) */}
+        {/* Map View */}
         <div className="rounded-lg border border-gray-200 bg-white p-4">
           <h2 className="mb-3 font-serif text-lg font-semibold text-[#1B3A5C]">Map View</h2>
-          <div className="flex h-80 items-center justify-center rounded bg-gray-50 text-sm text-gray-400">
-            Map component will render here
-          </div>
+          <MapView
+            geoSelection={geoSelection}
+            regionStatuses={regionStatuses}
+            provinceStatuses={provinceStatuses}
+            cityStatuses={cityStatuses}
+            onSelectRegion={selectRegion}
+            onSelectProvince={(reg, prv) => selectProvince(reg, prv)}
+            onSelectCity={(reg, prv, city) => selectCity(reg, prv, city)}
+            onBack={goToNational}
+          />
           <div className="mt-3 text-xs text-gray-500">
             {geoSelection.level === 'national' && `${regionStatuses.length} regions loaded`}
             {geoSelection.level === 'region' && `${provinceStatuses.length} provinces loaded`}
@@ -67,24 +79,20 @@ export default function AnalyticsPage() {
         </div>
 
         <div className="space-y-6">
-          {/* Vote Share Chart (placeholder) */}
+          {/* Vote Share Chart */}
           <div className="rounded-lg border border-gray-200 bg-white p-4">
             <h2 className="mb-3 font-serif text-lg font-semibold text-[#1B3A5C]">
               Vote Share {voteShare?.contest && `- ${voteShare.contest}`}
             </h2>
-            <div className="flex h-64 items-center justify-center rounded bg-gray-50 text-sm text-gray-400">
-              {loading ? 'Loading...' : voteShare ? `${voteShare.candidates.length} candidates` : 'Select a geography'}
-            </div>
+            <VoteShareChart data={voteShare} loading={loading} />
           </div>
 
-          {/* Undervote Panel (placeholder) */}
+          {/* Undervote Panel */}
           <div className="rounded-lg border border-gray-200 bg-white p-4">
             <h2 className="mb-3 font-serif text-lg font-semibold text-[#1B3A5C]">
               Under / Over Vote Analysis
             </h2>
-            <div className="flex h-32 items-center justify-center rounded bg-gray-50 text-sm text-gray-400">
-              {loading ? 'Loading...' : undervotes ? `${undervotes.undervoteRate}% undervote rate` : 'Select a geography'}
-            </div>
+            <UndervotePanel data={undervotes} loading={loading} />
           </div>
         </div>
       </div>
