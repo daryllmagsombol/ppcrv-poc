@@ -23,6 +23,7 @@ async function buildServiceWith(redis: RedisMock): Promise<{ module: TestingModu
       { provide: RedisService, useValue: redis },
     ],
   }).compile();
+  await module.init(); // trigger onModuleInit lifecycle
   const service = module.get<AnalyticsService>(AnalyticsService);
   return { module, service };
 }
